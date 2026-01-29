@@ -159,7 +159,7 @@ class TelegramHandler:
         if image.title and image.title != 'Без названия':
             caption_parts.append(f"<b>{image.title}</b>")
         
-        if image.rating > 0:
+        if image.rating is not None and image.rating > 0:
             stars = "⭐" * (image.rating // 20)  # Конвертация rating100 в звезды (0-5)
             caption_parts.append(f"Рейтинг: {stars} ({image.rating}/100)")
         
