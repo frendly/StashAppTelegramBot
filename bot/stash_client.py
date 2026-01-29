@@ -30,17 +30,28 @@ class StashImage:
 class StashClient:
     """Клиент для взаимодействия с StashApp GraphQL API."""
     
-    def __init__(self, api_url: str, api_key: Optional[str] = None):
+    def __init__(self, api_url: str, api_key: Optional[str] = None,
+                 username: Optional[str] = None, password: Optional[str] = None):
         """
         Инициализация клиента.
         
         Args:
             api_url: URL GraphQL API StashApp
             api_key: API ключ для авторизации (опционально)
+            username: Имя пользователя для Basic Auth (опционально)
+            password: Пароль для Basic Auth (опционально)
         """
         self.api_url = api_url
         self.api_key = api_key
+        self.username = username
+        self.password = password
         self.session: Optional[aiohttp.ClientSession] = None
+        self.auth: Optional[aiohttp.BasicAuth] = None
+        
+        # Создаем BasicAuth если есть логин/пароль
+        if self.username and self.password:
+            self.auth = aiohttp.BasicAuth(self.username, self.password)
+            logger.info("Basic Authentication включен")
     
     async def __aenter__(self):
         """Создание HTTP сессии."""
@@ -90,7 +101,8 @@ class StashClient:
             async with self.session.post(
                 self.api_url,
                 json=payload,
-                headers=self._get_headers()
+                headers=self._get_headers(),
+                auth=self.auth
             ) as response:
                 response.raise_for_status()
                 data = await response.json()
@@ -208,7 +220,13 @@ class StashClient:
             raise RuntimeError("HTTP сессия не инициализирована")
         
         try:
-            async with self.session.get(image_url, headers=self._get_headers()) as response:
+            # Добавляем API Key в URL как query параметр, если он есть
+            download_url = image_url
+            if self.api_key:
+                separator = '&' if '?' in image_url else '?'
+                download_url = f"{image_url}{separator}apikey={self.api_key}"
+            
+            async with self.session.get(download_url, auth=self.auth) as response:
                 response.raise_for_status()
                 image_data = await response.read()
                 logger.debug(f"Изображение скачано: {len(image_data)} байт")

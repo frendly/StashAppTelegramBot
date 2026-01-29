@@ -19,6 +19,8 @@ class StashConfig:
     """Конфигурация StashApp API."""
     api_url: str
     api_key: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
 
 
 @dataclass
@@ -72,6 +74,8 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
     # Поддержка переменных окружения
     telegram_token = os.getenv('TELEGRAM_BOT_TOKEN') or config_data['telegram']['bot_token']
     stash_api_key = os.getenv('STASH_API_KEY') or config_data['stash'].get('api_key', '')
+    stash_username = os.getenv('STASH_USERNAME') or config_data['stash'].get('username', '')
+    stash_password = os.getenv('STASH_PASSWORD') or config_data['stash'].get('password', '')
     
     telegram_config = TelegramConfig(
         bot_token=telegram_token,
@@ -80,7 +84,9 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
     
     stash_config = StashConfig(
         api_url=config_data['stash']['api_url'],
-        api_key=stash_api_key if stash_api_key else None
+        api_key=stash_api_key if stash_api_key else None,
+        username=stash_username if stash_username else None,
+        password=stash_password if stash_password else None
     )
     
     scheduler_config = SchedulerConfig(

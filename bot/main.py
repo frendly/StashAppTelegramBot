@@ -71,7 +71,9 @@ class Bot:
             logger.info(f"Инициализация StashApp клиента: {self.config.stash.api_url}")
             self.stash_client = StashClient(
                 api_url=self.config.stash.api_url,
-                api_key=self.config.stash.api_key
+                api_key=self.config.stash.api_key,
+                username=self.config.stash.username,
+                password=self.config.stash.password
             )
             
             # Вход в async context для HTTP сессии
