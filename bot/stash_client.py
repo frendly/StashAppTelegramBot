@@ -116,13 +116,11 @@ class StashClient:
         Returns:
             Optional[StashImage]: Случайное изображение или None
         """
+        # Упрощенный запрос без image_filter для совместимости со старыми версиями StashApp
         query = """
-        query FindRandomImage($excludeIds: [ID!]) {
+        query FindRandomImage {
           findImages(
-            image_filter: {
-              id: { modifier: NOT_EQUALS, value: $excludeIds }
-            }
-            filter: { per_page: 1, sort: "random" }
+            filter: { per_page: 50, sort: "random" }
           ) {
             images {
               id
@@ -139,21 +137,27 @@ class StashClient:
         }
         """
         
-        variables = {}
-        if exclude_ids:
-            # GraphQL NOT_EQUALS с массивом для исключения нескольких ID
-            # Альтернативный подход - получить несколько случайных и фильтровать
-            logger.debug(f"Исключаем {len(exclude_ids)} изображений")
-            variables = {"excludeIds": exclude_ids}
-        
         try:
-            data = await self._execute_query(query, variables)
+            data = await self._execute_query(query)
             images = data.get('findImages', {}).get('images', [])
             
             if not images:
                 logger.warning("Случайное изображение не найдено")
                 return None
             
+            # Локальная фильтрация: исключаем изображения из exclude_ids
+            if exclude_ids:
+                exclude_set = set(exclude_ids)
+                filtered_images = [img for img in images if img['id'] not in exclude_set]
+                logger.debug(f"Получено {len(images)} изображений, после фильтрации: {len(filtered_images)}")
+                
+                if not filtered_images:
+                    logger.warning("После фильтрации не осталось изображений")
+                    return None
+                
+                images = filtered_images
+            
+            # Возвращаем первое подходящее изображение
             image_data = images[0]
             image = StashImage(image_data)
             logger.info(f"Получено случайное изображение: {image}")
