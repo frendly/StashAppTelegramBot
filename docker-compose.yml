@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  stash-telegram-bot:
+    build: .
+    container_name: stash-telegram-bot
+    restart: unless-stopped
+    
+    volumes:
+      # Конфигурация
+      - ./config.yml:/config/config.yml:ro
+      # База данных (персистентное хранилище)
+      - ./data:/data
+      # Логи (опционально)
+      - ./logs:/app/logs
+    
+    environment:
+      # Переменные окружения (можно переопределить в .env файле)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - STASH_API_KEY=${STASH_API_KEY:-}
+      - TZ=${TIMEZONE:-Europe/Moscow}
+    
+    # Если StashApp запущен в том же docker-compose
+    # networks:
+    #   - stash-network
+    
+    # Лимиты ресурсов (опционально)
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Если нужна отдельная сеть для связи со StashApp
+# networks:
+#   stash-network:
+#     external: true

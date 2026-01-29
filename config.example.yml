@@ -1,0 +1,47 @@
+# StashApp Telegram Bot Configuration
+
+telegram:
+  # Telegram Bot Token от @BotFather
+  bot_token: "YOUR_BOT_TOKEN_HERE"
+  
+  # Список разрешенных Telegram ID пользователей
+  # Узнать свой ID можно через @userinfobot
+  allowed_user_ids:
+    - 123456789
+    - 987654321
+
+stash:
+  # URL StashApp GraphQL API
+  # Для Docker: http://stash:9999/graphql (если в одной сети)
+  # Для локальной установки: http://localhost:9999/graphql
+  api_url: "http://stash:9999/graphql"
+  
+  # API ключ StashApp (опционально, если требуется авторизация)
+  # Оставьте пустым, если не используется
+  api_key: ""
+
+scheduler:
+  # Включить/выключить автоматическую отправку по расписанию
+  enabled: true
+  
+  # Cron выражение для расписания
+  # Формат: минута час день месяц день_недели
+  # Примеры:
+  #   "0 10 * * *"     - каждый день в 10:00
+  #   "0 9,21 * * *"   - каждый день в 9:00 и 21:00
+  #   "0 12 * * 1-5"   - с понедельника по пятницу в 12:00
+  #   "*/30 * * * *"   - каждые 30 минут
+  cron: "0 10 * * *"
+  
+  # Временная зона для расписания
+  timezone: "Europe/Moscow"
+
+history:
+  # Количество дней, в течение которых не повторять отправленные фото
+  # Чем больше значение, тем меньше вероятность повторения
+  avoid_recent_days: 30
+
+database:
+  # Путь к SQLite базе данных
+  # Для Docker рекомендуется /data/sent_photos.db
+  path: "/data/sent_photos.db"
