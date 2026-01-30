@@ -1,8 +1,10 @@
 # StashApp Telegram Bot Dockerfile
 FROM python:3.11-slim
 
-# Установка системных зависимостей
-RUN apt-get update && apt-get install -y \
+# Установка системных зависимостей с кэшированием
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
@@ -12,18 +14,17 @@ WORKDIR /app
 # Копирование файлов зависимостей
 COPY requirements.txt .
 
-# Установка Python зависимостей
-RUN pip install --no-cache-dir -r requirements.txt
+# Установка Python зависимостей с кэшированием pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir -r requirements.txt
+
+# Создание директории для данных и пользователя (до копирования кода)
+RUN mkdir -p /data /config && \
+    useradd -m -u 1000 botuser && \
+    chown -R botuser:botuser /app /data /config
 
 # Копирование кода приложения
 COPY bot/ ./bot/
-
-# Создание директории для данных
-RUN mkdir -p /data /config
-
-# Создание пользователя для запуска приложения (безопасность)
-RUN useradd -m -u 1000 botuser && \
-    chown -R botuser:botuser /app /data /config
 
 # Переключение на непривилегированного пользователя
 USER botuser
