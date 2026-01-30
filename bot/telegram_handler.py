@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from typing import Optional, Dict, Any, List
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -62,6 +62,20 @@ class TelegramHandler:
             bool: True если пользователь авторизован
         """
         return user_id in self.config.telegram.allowed_user_ids
+    
+    def _get_persistent_keyboard(self) -> ReplyKeyboardMarkup:
+        """
+        Создание постоянной клавиатуры с кнопкой Random.
+        
+        Returns:
+            ReplyKeyboardMarkup: Клавиатура с кнопкой Random
+        """
+        keyboard = [[KeyboardButton("💕 Random")]]
+        return ReplyKeyboardMarkup(
+            keyboard,
+            resize_keyboard=True,
+            one_time_keyboard=False
+        )
     
     async def _send_random_photo(
         self,
@@ -323,7 +337,11 @@ class TelegramHandler:
             f"{'включена ✅' if self.config.scheduler.enabled else 'выключена ❌'}"
         )
         
-        await update.message.reply_text(welcome_message, parse_mode='HTML')
+        await update.message.reply_text(
+            welcome_message, 
+            parse_mode='HTML',
+            reply_markup=self._get_persistent_keyboard()
+        )
         logger.info(f"Команда /start от user_id={user_id}")
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -352,7 +370,11 @@ class TelegramHandler:
             f"<b>Расписание:</b> {self.config.scheduler.cron if self.config.scheduler.enabled else 'Не настроено'}"
         )
         
-        await update.message.reply_text(help_message, parse_mode='HTML')
+        await update.message.reply_text(
+            help_message, 
+            parse_mode='HTML',
+            reply_markup=self._get_persistent_keyboard()
+        )
         logger.info(f"Команда /help от user_id={user_id}")
     
     async def random_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -371,7 +393,8 @@ class TelegramHandler:
             if time_passed < 10:
                 wait_time = int(10 - time_passed)
                 await update.message.reply_text(
-                    f"⏳ Подождите {wait_time} секунд перед следующим запросом."
+                    f"⏳ Подождите {wait_time} секунд перед следующим запросом.",
+                    reply_markup=self._get_persistent_keyboard()
                 )
                 logger.warning(f"Rate limit для user_id={user_id}, осталось {wait_time}с")
                 return
@@ -381,7 +404,10 @@ class TelegramHandler:
         logger.info(f"Команда /random от user_id={user_id}")
         
         # Отправка сообщения о загрузке
-        loading_msg = await update.message.reply_text("🔄 Загружаю случайное фото...")
+        loading_msg = await update.message.reply_text(
+            "🔄 Загружаю случайное фото...",
+            reply_markup=self._get_persistent_keyboard()
+        )
         
         # Отправка случайного фото
         success = await self._send_random_photo(chat_id, user_id, context)
@@ -391,6 +417,50 @@ class TelegramHandler:
         
         if not success:
             logger.error(f"Не удалось отправить фото user_id={user_id}")
+    
+    async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик текстовых сообщений (кнопка Random)."""
+        user_id = update.effective_user.id
+        chat_id = update.effective_chat.id
+        text = update.message.text
+        
+        if not self._is_authorized(user_id):
+            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
+            return
+        
+        # Обработка кнопки Random
+        if text == "💕 Random":
+            # Rate limiting - не чаще 1 раза в 10 секунд
+            now = time.time()
+            if user_id in self._last_command_time:
+                time_passed = now - self._last_command_time[user_id]
+                if time_passed < 10:
+                    wait_time = int(10 - time_passed)
+                    await update.message.reply_text(
+                        f"⏳ Подождите {wait_time} секунд перед следующим запросом.",
+                        reply_markup=self._get_persistent_keyboard()
+                    )
+                    logger.warning(f"Rate limit для user_id={user_id}, осталось {wait_time}с")
+                    return
+            
+            self._last_command_time[user_id] = now
+            
+            logger.info(f"Кнопка Random от user_id={user_id}")
+            
+            # Отправка сообщения о загрузке
+            loading_msg = await update.message.reply_text(
+                "🔄 Загружаю случайное фото...",
+                reply_markup=self._get_persistent_keyboard()
+            )
+            
+            # Отправка случайного фото
+            success = await self._send_random_photo(chat_id, user_id, context)
+            
+            # Удаление сообщения о загрузке
+            await loading_msg.delete()
+            
+            if not success:
+                logger.error(f"Не удалось отправить фото user_id={user_id}")
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /stats."""
@@ -428,7 +498,11 @@ class TelegramHandler:
             stats_message += f"\n🕐 Последнее фото: {title or 'Без названия'}\n"
             stats_message += f"📅 Дата: {sent_at[:19]}"
         
-        await update.message.reply_text(stats_message, parse_mode='HTML')
+        await update.message.reply_text(
+            stats_message, 
+            parse_mode='HTML',
+            reply_markup=self._get_persistent_keyboard()
+        )
     
     async def preferences_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /preferences."""
@@ -511,7 +585,11 @@ class TelegramHandler:
            not summary['top_galleries'] and not summary['worst_galleries']:
             prefs_message += "\n\n💡 <i>Пока нет данных. Начните голосовать за фото!</i>"
         
-        await update.message.reply_text(prefs_message, parse_mode='HTML')
+        await update.message.reply_text(
+            prefs_message, 
+            parse_mode='HTML',
+            reply_markup=self._get_persistent_keyboard()
+        )
     
     async def send_scheduled_photo(self, chat_id: int):
         """
@@ -694,6 +772,10 @@ class TelegramHandler:
         application.add_handler(CommandHandler("random", self.random_command))
         application.add_handler(CommandHandler("stats", self.stats_command))
         application.add_handler(CommandHandler("preferences", self.preferences_command))
+        
+        # Добавление обработчика текстовых сообщений (кнопка Random)
+        from telegram.ext import MessageHandler
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
         
         # Добавление обработчиков callback для голосования
         application.add_handler(CallbackQueryHandler(self.handle_vote_callback, pattern=r'^vote_'))
