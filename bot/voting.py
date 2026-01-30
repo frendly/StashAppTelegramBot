@@ -95,6 +95,13 @@ class VotingManager:
                 
                 result['gallery_updated'] = image.gallery_title
                 
+                # 4.1. Обновляем вес галереи с учетом коэффициента k=0.2
+                try:
+                    new_weight = self.database.update_gallery_weight(image.gallery_id, vote)
+                    logger.debug(f"Вес галереи '{image.gallery_title}' обновлен: {new_weight:.3f}")
+                except Exception as e:
+                    logger.warning(f"Ошибка при обновлении веса галереи {image.gallery_id}: {e}")
+                
                 # 5. Если достигнут порог в 5 голосов, устанавливаем рейтинг галереи
                 if should_update_gallery:
                     gallery_pref = self.database.get_gallery_preference(image.gallery_id)
