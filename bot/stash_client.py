@@ -2,6 +2,7 @@
 
 import aiohttp
 import logging
+import random
 import time
 from typing import List, Optional, Dict, Any
 
@@ -247,6 +248,97 @@ class StashClient:
         
         logger.error(f"Не удалось получить изображение после {max_retries} попыток")
         return None
+    
+    async def get_random_image_from_gallery(
+        self,
+        gallery_id: str,
+        exclude_ids: Optional[List[str]] = None
+    ) -> Optional[StashImage]:
+        """
+        Получение случайного изображения из конкретной галереи.
+        
+        Args:
+            gallery_id: ID галереи
+            exclude_ids: Список ID изображений для исключения
+            
+        Returns:
+            Optional[StashImage]: Случайное изображение или None
+        """
+        start_time = time.perf_counter()
+        
+        query = """
+        query GetRandomImageFromGallery($gallery_id: ID!, $per_page: Int!) {
+          findImages(
+            filter: {
+              galleries: { value: [$gallery_id], modifier: INCLUDES }
+              per_page: $per_page
+              sort: "random"
+            }
+          ) {
+            images {
+              id
+              title
+              rating100
+              paths {
+                thumbnail
+                preview
+                image
+              }
+              galleries {
+                id
+                title
+              }
+              performers {
+                id
+                name
+              }
+            }
+          }
+        }
+        """
+        
+        variables = {
+            "gallery_id": gallery_id,
+            "per_page": 20
+        }
+        
+        try:
+            query_start = time.perf_counter()
+            data = await self._execute_query(query, variables)
+            query_duration = time.perf_counter() - query_start
+            
+            images = data.get('findImages', {}).get('images', [])
+            
+            if not images:
+                logger.warning(f"Случайное изображение не найдено в галерее {gallery_id}")
+                return None
+            
+            # Локальная фильтрация: исключаем изображения из exclude_ids
+            filter_start = time.perf_counter()
+            if exclude_ids:
+                exclude_set = set(exclude_ids)
+                filtered_images = [img for img in images if img['id'] not in exclude_set]
+                filter_duration = time.perf_counter() - filter_start
+                logger.debug(f"Получено {len(images)} изображений из галереи {gallery_id}, после фильтрации: {len(filtered_images)} ({filter_duration:.3f}s)")
+                
+                if not filtered_images:
+                    logger.warning(f"После фильтрации не осталось изображений в галерее {gallery_id}")
+                    return None
+                
+                images = filtered_images
+            
+            # Возвращаем первое подходящее изображение
+            image_data = images[0]
+            image = StashImage(image_data)
+            
+            total_duration = time.perf_counter() - start_time
+            logger.info(f"⏱️  get_random_image_from_gallery: {total_duration:.3f}s (query: {query_duration:.3f}s, gallery: {gallery_id})")
+            return image
+        
+        except Exception as e:
+            duration = time.perf_counter() - start_time
+            logger.error(f"⏱️  get_random_image_from_gallery failed after {duration:.3f}s (gallery: {gallery_id}): {e}")
+            return None
     
     async def download_image(self, image_url: str) -> Optional[bytes]:
         """

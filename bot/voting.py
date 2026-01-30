@@ -29,6 +29,10 @@ class VotingManager:
         # Кэш для списков фильтрации
         self._filtering_cache: Optional[Dict[str, List[str]]] = None
         self._filtering_cache_time: float = 0
+        
+        # Кэш для весов галерей
+        self._weights_cache: Optional[Dict[str, float]] = None
+        self._weights_cache_time: float = 0
     
     async def process_vote(
         self,
@@ -99,6 +103,8 @@ class VotingManager:
                 try:
                     new_weight = self.database.update_gallery_weight(image.gallery_id, vote)
                     logger.debug(f"Вес галереи '{image.gallery_title}' обновлен: {new_weight:.3f}")
+                    # Инвалидируем кэш весов после обновления
+                    self.invalidate_weights_cache()
                 except Exception as e:
                     logger.warning(f"Ошибка при обновлении веса галереи {image.gallery_id}: {e}")
                 
@@ -234,3 +240,30 @@ class VotingManager:
         logger.debug("⏱️  Invalidating filtering lists cache")
         self._filtering_cache = None
         self._filtering_cache_time = 0
+    
+    def get_cached_gallery_weights(self) -> Dict[str, float]:
+        """
+        Получение весов активных галерей с кэшированием.
+        
+        Returns:
+            Dict[str, float]: Словарь {gallery_id: weight} для всех неисключенных галерей
+        """
+        current_time = time.time()
+        
+        # Проверяем, актуален ли кэш
+        if self._weights_cache is not None and (current_time - self._weights_cache_time) < self.cache_ttl:
+            logger.debug(f"⏱️  Using cached gallery weights (age: {current_time - self._weights_cache_time:.1f}s)")
+            return self._weights_cache
+        
+        # Обновляем кэш
+        logger.debug("⏱️  Refreshing gallery weights cache")
+        self._weights_cache = self.database.get_active_gallery_weights()
+        self._weights_cache_time = current_time
+        
+        return self._weights_cache
+    
+    def invalidate_weights_cache(self):
+        """Инвалидация кэша весов галерей (вызывается после обновления веса)."""
+        logger.debug("⏱️  Invalidating gallery weights cache")
+        self._weights_cache = None
+        self._weights_cache_time = 0

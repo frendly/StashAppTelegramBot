@@ -59,6 +59,7 @@ class Database(DatabaseBase):
         self.get_gallery_weight = self.weights_repo.get_gallery_weight
         self.update_gallery_weight = self.weights_repo.update_gallery_weight
         self.get_all_gallery_weights = self.weights_repo.get_all_gallery_weights
+        self.get_active_gallery_weights = self.weights_repo.get_active_gallery_weights
         
         # Statistics methods
         self.update_gallery_image_count = self.statistics_repo.update_gallery_image_count

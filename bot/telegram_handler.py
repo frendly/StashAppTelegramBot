@@ -15,7 +15,7 @@ from telegram.ext import (
 from telegram.error import TelegramError
 
 from bot.config import BotConfig
-from bot.stash_client import StashClient, StashImage
+from bot.stash_client import StashClient, StashImage, select_gallery_by_weight
 from bot.database import Database
 from bot.performance import PerformanceTimer
 
@@ -231,13 +231,53 @@ class TelegramHandler:
         """
         Получение случайного изображения с учетом фильтров и предпочтений.
         
+        Использует взвешенный случайный выбор галереи на основе весов.
+        При отсутствии весов или ошибках использует fallback на старый метод.
+        
         Args:
             exclude_ids: Список ID изображений для исключения
             
         Returns:
             Optional[StashImage]: Случайное изображение или None
         """
-        if self.voting_manager:
+        # Если нет voting_manager, используем старый метод
+        if not self.voting_manager:
+            return await self.stash_client.get_random_image_with_retry(
+                exclude_ids=exclude_ids,
+                max_retries=5
+            )
+        
+        # Пытаемся использовать взвешенный выбор галереи
+        try:
+            # Получаем веса активных галерей (используем кэшированную версию)
+            weights_dict = self.voting_manager.get_cached_gallery_weights()
+            
+            # Проверяем, есть ли веса и они не пустые
+            if weights_dict:
+                # Выбираем галерею взвешенным случайным выбором
+                selected_gallery_id = select_gallery_by_weight(weights_dict)
+                
+                if selected_gallery_id:
+                    # Получаем случайное изображение из выбранной галереи
+                    image = await self.stash_client.get_random_image_from_gallery(
+                        gallery_id=selected_gallery_id,
+                        exclude_ids=exclude_ids
+                    )
+                    
+                    if image:
+                        logger.debug(f"Изображение получено из галереи {selected_gallery_id} (взвешенный выбор)")
+                        return image
+                    else:
+                        logger.warning(f"Не удалось получить изображение из галереи {selected_gallery_id}, используем fallback")
+                else:
+                    logger.warning("Не удалось выбрать галерею взвешенным выбором, используем fallback")
+            else:
+                logger.warning("Веса галерей отсутствуют или пусты, используем fallback")
+        except Exception as e:
+            logger.warning(f"Ошибка при взвешенном выборе галереи: {e}, используем fallback", exc_info=True)
+        
+        # Fallback: используем старый метод с фильтрацией
+        try:
             filtering_lists = self.voting_manager.get_filtering_lists()
             return await self.stash_client.get_random_image_weighted(
                 exclude_ids=exclude_ids,
@@ -247,7 +287,9 @@ class TelegramHandler:
                 whitelisted_galleries=filtering_lists['whitelisted_galleries'],
                 max_retries=5
             )
-        else:
+        except Exception as e:
+            logger.warning(f"Ошибка при fallback методе с фильтрацией: {e}, используем базовый метод")
+            # Последний fallback: базовый метод без фильтрации
             return await self.stash_client.get_random_image_with_retry(
                 exclude_ids=exclude_ids,
                 max_retries=5

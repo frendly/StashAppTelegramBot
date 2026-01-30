@@ -2,7 +2,7 @@
 
 import sqlite3
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -118,12 +118,12 @@ class WeightsRepository:
             
             return new_weight
     
-    def get_all_gallery_weights(self) -> List[Dict[str, Any]]:
+    def _get_active_gallery_weights_data(self) -> List[tuple]:
         """
-        Получение всех весов галерей (для взвешенного выбора).
+        Внутренний метод для получения данных активных (неисключенных) галерей.
         
         Returns:
-            List[Dict]: Список словарей с gallery_id и weight, исключая исключенные галереи
+            List[tuple]: Список кортежей (gallery_id, weight)
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -132,12 +132,33 @@ class WeightsRepository:
                 FROM gallery_preferences
                 WHERE excluded = FALSE OR excluded IS NULL
             """)
-            
-            results = cursor.fetchall()
-            return [
-                {
-                    'gallery_id': row[0],
-                    'weight': float(row[1]) if row[1] is not None else 1.0
-                }
-                for row in results
-            ]
+            return cursor.fetchall()
+    
+    def get_all_gallery_weights(self) -> List[Dict[str, Any]]:
+        """
+        Получение всех весов галерей (для взвешенного выбора).
+        
+        Returns:
+            List[Dict]: Список словарей с gallery_id и weight, исключая исключенные галереи
+        """
+        results = self._get_active_gallery_weights_data()
+        return [
+            {
+                'gallery_id': row[0],
+                'weight': float(row[1]) if row[1] is not None else 1.0
+            }
+            for row in results
+        ]
+    
+    def get_active_gallery_weights(self) -> Dict[str, float]:
+        """
+        Получение словаря весов активных (неисключенных) галерей.
+        
+        Returns:
+            Dict[str, float]: Словарь {gallery_id: weight} для всех неисключенных галерей
+        """
+        results = self._get_active_gallery_weights_data()
+        return {
+            row[0]: float(row[1]) if row[1] is not None else 1.0
+            for row in results
+        }
