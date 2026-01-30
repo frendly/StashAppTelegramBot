@@ -1,7 +1,8 @@
 # StashApp Telegram Bot - Technical Reference
 
 > **Compact version for Cursor AI**  
-> Full docs: [CURSOR_FULL.md](CURSOR_FULL.md) | [README.md](README.md)
+> Full docs: [CURSOR_FULL.md](CURSOR_FULL.md) | [README.md](README.md)  
+> **⚠️ AI:** Always respond in Russian. Code comments must be in Russian.
 
 ---
 

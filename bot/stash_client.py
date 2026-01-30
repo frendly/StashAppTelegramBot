@@ -151,7 +151,9 @@ class StashClient:
             Dict[str, Any]: Результат запроса
             
         Raises:
-            Exception: При ошибке запроса
+            RuntimeError: Если HTTP сессия не инициализирована
+            aiohttp.ClientResponseError: При HTTP ошибках (4xx, 5xx)
+            Exception: При GraphQL ошибках в ответе
         """
         if not self.session:
             raise RuntimeError("HTTP сессия не инициализирована. Используйте async with.")
@@ -168,16 +170,44 @@ class StashClient:
                 headers=self._get_headers(),
                 auth=self.auth
             ) as response:
-                response.raise_for_status()
-                data = await response.json()
-                
                 duration = time.perf_counter() - start_time
-                logger.debug(f"⏱️  GraphQL query executed: {duration:.3f}s")
                 
-                if 'errors' in data:
-                    error_msg = data['errors'][0].get('message', 'Unknown error')
-                    logger.error(f"GraphQL ошибка: {error_msg}")
+                # Пытаемся прочитать ответ как JSON
+                try:
+                    data = await response.json()
+                except Exception:
+                    # Если ответ не JSON, читаем как текст для логирования
+                    try:
+                        text_response = await response.text()
+                        logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: HTTP {response.status}, non-JSON response: {text_response[:500]}")
+                    except Exception:
+                        logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: HTTP {response.status}, failed to read response body")
+                    # Выбрасываем HTTP ошибку (выбросит aiohttp.ClientResponseError при статусе >= 400)
+                    response.raise_for_status()
+                    # Если статус < 400, но ответ не JSON - это тоже ошибка для GraphQL API
+                    raise Exception(f"GraphQL API вернул не-JSON ответ при статусе {response.status}")
+                
+                # Проверяем HTTP ошибки и GraphQL ошибки
+                error_details = data.get('errors', [])
+                
+                if response.status >= 400:
+                    # HTTP ошибка (4xx, 5xx)
+                    if error_details:
+                        error_msg = error_details[0].get('message', 'Unknown error')
+                        logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: HTTP {response.status}, GraphQL error: {error_msg}")
+                        logger.debug(f"Full error response: {data}")
+                    else:
+                        logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: HTTP {response.status}, response: {data}")
+                    # Выбрасываем HTTP ошибку
+                    response.raise_for_status()
+                elif error_details:
+                    # GraphQL ошибка при успешном HTTP ответе (200 OK)
+                    error_msg = error_details[0].get('message', 'Unknown error')
+                    logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: GraphQL error: {error_msg}")
+                    logger.debug(f"Full error response: {data}")
                     raise Exception(f"GraphQL error: {error_msg}")
+                
+                logger.debug(f"⏱️  GraphQL query executed: {duration:.3f}s")
                 
                 return data.get('data', {})
         
@@ -310,11 +340,11 @@ class StashClient:
         start_time = time.perf_counter()
         
         query = """
-        query GetRandomImageFromGallery($gallery_id: ID!, $per_page: Int!) {
+        query GetRandomImageFromGallery($gallery_id: ID!) {
           findImages(
             filter: {
               galleries: { value: [$gallery_id], modifier: INCLUDES }
-              per_page: $per_page
+              per_page: 20
               sort: "random"
             }
           ) {
@@ -341,8 +371,7 @@ class StashClient:
         """
         
         variables = {
-            "gallery_id": gallery_id,
-            "per_page": 20
+            "gallery_id": gallery_id
         }
         
         try:
