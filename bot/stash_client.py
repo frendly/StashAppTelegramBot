@@ -24,9 +24,9 @@ class StashImage:
         self.title = data.get('title', 'Без названия')
         self.rating = data.get('rating100', 0)
         
-        # Используем preview для быстрой загрузки, fallback на оригинал
+        # Используем thumbnail для максимально быстрой загрузки, fallback на preview и оригинал
         paths = data.get('paths', {})
-        self.image_url = paths.get('preview') or paths.get('image', '')
+        self.image_url = paths.get('thumbnail') or paths.get('preview') or paths.get('image', '')
         
         # Теги опциональны (могут не запрашиваться для ускорения)
         self.tags = [tag['name'] for tag in data.get('tags', [])]
@@ -154,7 +154,7 @@ class StashClient:
         """
         start_time = time.perf_counter()
         
-        # Запрос с preview для оптимизации скорости загрузки
+        # Запрос с thumbnail для оптимизации скорости загрузки
         # Уменьшено до 20 изображений и убраны теги для ускорения
         query = """
         query FindRandomImage {
@@ -166,6 +166,7 @@ class StashClient:
               title
               rating100
               paths {
+                thumbnail
                 preview
                 image
               }

@@ -1,8 +1,9 @@
 """Обработчики команд Telegram бота."""
 
+import asyncio
 import logging
 import time
-from typing import Optional, Dict
+from typing import Optional, Dict, Any, List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -47,6 +48,8 @@ class TelegramHandler:
         self.application: Optional[Application] = None
         self._last_command_time: Dict[int, float] = {}  # Rate limiting
         self._last_sent_images: Dict[int, StashImage] = {}  # Кэш последних отправленных изображений
+        self._prefetched_image: Optional[Dict[str, Any]] = None  # Предзагруженное изображение {image, image_data}
+        self._prefetch_lock: asyncio.Lock = asyncio.Lock()  # Lock для синхронизации предзагрузки
     
     def _is_authorized(self, user_id: int) -> bool:
         """
@@ -81,57 +84,69 @@ class TelegramHandler:
         timer.start()
         
         try:
-            # Получение списка недавно отправленных ID
-            recent_ids = self.database.get_recent_image_ids(
-                self.config.history.avoid_recent_days
-            )
-            timer.checkpoint("Get recent IDs from DB")
+            # Проверка наличия предзагруженного изображения
+            image = None
+            image_data = None
+            used_prefetch = False
             
-            logger.info(f"Запрос случайного фото (исключая {len(recent_ids)} недавних)")
-            
-            # Получение случайного изображения с учетом предпочтений
-            if self.voting_manager:
-                filtering_lists = self.voting_manager.get_filtering_lists()
-                timer.checkpoint("Get filtering lists from DB")
+            if self._prefetched_image:
+                # Проверяем, что предзагруженное изображение еще актуально
+                recent_ids = self.database.get_recent_image_ids(
+                    self.config.history.avoid_recent_days
+                )
+                prefetched_image = self._prefetched_image['image']
                 
-                image = await self.stash_client.get_random_image_weighted(
-                    exclude_ids=recent_ids,
-                    blacklisted_performers=filtering_lists['blacklisted_performers'],
-                    blacklisted_galleries=filtering_lists['blacklisted_galleries'],
-                    whitelisted_performers=filtering_lists['whitelisted_performers'],
-                    whitelisted_galleries=filtering_lists['whitelisted_galleries'],
-                    max_retries=5
+                if prefetched_image.id not in recent_ids:
+                    logger.info("⚡ Используется предзагруженное изображение")
+                    image = prefetched_image
+                    image_data = self._prefetched_image['image_data']
+                    self._prefetched_image = None  # Очистка кэша
+                    used_prefetch = True
+                    timer.checkpoint("Use prefetched image")
+                else:
+                    logger.info("⚠️ Предзагруженное изображение устарело, загружаем новое")
+                    self._prefetched_image = None  # Очистка устаревшего кэша
+                    timer.checkpoint("Clear stale cache")
+            
+            # Если нет предзагруженного изображения, загружаем обычным способом
+            if not image or not image_data:
+                # Получение списка недавно отправленных ID
+                recent_ids = self.database.get_recent_image_ids(
+                    self.config.history.avoid_recent_days
                 )
-                timer.checkpoint("Get random image (weighted)")
-            else:
-                # Fallback на обычный метод, если voting_manager не инициализирован
-                image = await self.stash_client.get_random_image_with_retry(
-                    exclude_ids=recent_ids,
-                    max_retries=5
-                )
-                timer.checkpoint("Get random image (simple)")
-            
-            if not image:
-                logger.error("Не удалось получить случайное изображение")
-                if context:
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text="❌ Не удалось получить изображение из StashApp. Попробуйте позже."
-                    )
-                return False
-            
-            # Скачивание изображения
-            image_data = await self.stash_client.download_image(image.image_url)
-            timer.checkpoint("Download image")
-            
-            if not image_data:
-                logger.error(f"Не удалось скачать изображение {image.id}")
-                if context:
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text="❌ Не удалось скачать изображение. Попробуйте позже."
-                    )
-                return False
+                timer.checkpoint("Get recent IDs from DB")
+                
+                logger.info(f"Запрос случайного фото (исключая {len(recent_ids)} недавних)")
+                
+                # Получение списка фильтров для метрик
+                if self.voting_manager:
+                    timer.checkpoint("Get filtering lists from DB")
+                
+                # Получение случайного изображения с учетом предпочтений
+                image = await self._get_random_image(recent_ids)
+                timer.checkpoint("Get random image")
+                
+                if not image:
+                    logger.error("Не удалось получить случайное изображение")
+                    if context:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ Не удалось получить изображение из StashApp. Попробуйте позже."
+                        )
+                    return False
+                
+                # Скачивание изображения
+                image_data = await self.stash_client.download_image(image.image_url)
+                timer.checkpoint("Download image")
+                
+                if not image_data:
+                    logger.error(f"Не удалось скачать изображение {image.id}")
+                    if context:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ Не удалось скачать изображение. Попробуйте позже."
+                        )
+                    return False
             
             # Формирование подписи
             caption = self._format_caption(image)
@@ -179,8 +194,14 @@ class TelegramHandler:
             )
             timer.checkpoint("Save to database")
             
+            # Запуск фоновой предзагрузки следующего изображения
+            # Только если была команда от пользователя (не планировщик)
+            if user_id:
+                asyncio.create_task(self._prefetch_next_image())
+                logger.debug("🔄 Запущена фоновая предзагрузка следующего изображения")
+            
             timer.end()
-            logger.info(f"Фото успешно отправлено: {image.id}")
+            logger.info(f"Фото успешно отправлено: {image.id} {'(использована предзагрузка)' if used_prefetch else ''}")
             return True
         
         except TelegramError as e:
@@ -191,6 +212,32 @@ class TelegramHandler:
             logger.error(f"Неожиданная ошибка при отправке фото: {e}")
             timer.end()
             return False
+    
+    async def _get_random_image(self, exclude_ids: List[str]) -> Optional[StashImage]:
+        """
+        Получение случайного изображения с учетом фильтров и предпочтений.
+        
+        Args:
+            exclude_ids: Список ID изображений для исключения
+            
+        Returns:
+            Optional[StashImage]: Случайное изображение или None
+        """
+        if self.voting_manager:
+            filtering_lists = self.voting_manager.get_filtering_lists()
+            return await self.stash_client.get_random_image_weighted(
+                exclude_ids=exclude_ids,
+                blacklisted_performers=filtering_lists['blacklisted_performers'],
+                blacklisted_galleries=filtering_lists['blacklisted_galleries'],
+                whitelisted_performers=filtering_lists['whitelisted_performers'],
+                whitelisted_galleries=filtering_lists['whitelisted_galleries'],
+                max_retries=5
+            )
+        else:
+            return await self.stash_client.get_random_image_with_retry(
+                exclude_ids=exclude_ids,
+                max_retries=5
+            )
     
     def _format_caption(self, image: StashImage) -> str:
         """
@@ -216,6 +263,45 @@ class TelegramHandler:
             caption_parts.append(f"Теги: {tags_str}")
         
         return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
+    
+    async def _prefetch_next_image(self):
+        """
+        Предзагрузка следующего изображения в фоновом режиме.
+        Выполняется асинхронно после отправки текущего фото.
+        """
+        async with self._prefetch_lock:
+            try:
+                logger.debug("🔄 Начало предзагрузки следующего изображения...")
+                
+                # Получение списка недавно отправленных ID
+                recent_ids = self.database.get_recent_image_ids(
+                    self.config.history.avoid_recent_days
+                )
+                
+                # Получение случайного изображения с учетом предпочтений
+                image = await self._get_random_image(recent_ids)
+                
+                if not image:
+                    logger.warning("⚠️ Не удалось предзагрузить изображение")
+                    return
+                
+                # Скачивание изображения
+                image_data = await self.stash_client.download_image(image.image_url)
+                
+                if not image_data:
+                    logger.warning(f"⚠️ Не удалось скачать изображение {image.id} для предзагрузки")
+                    return
+                
+                # Сохранение в кэш
+                self._prefetched_image = {
+                    'image': image,
+                    'image_data': image_data
+                }
+                
+                logger.info(f"✅ Предзагружено изображение {image.id} ({len(image_data) / 1024:.1f} KB)")
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при предзагрузке изображения: {e}")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start."""
