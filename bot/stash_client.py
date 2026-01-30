@@ -343,7 +343,7 @@ class StashClient:
         query GetRandomImageFromGallery($gallery_id: ID!) {
           findImages(
             filter: {
-              galleries: { value: [$gallery_id], modifier: INCLUDES }
+              gallery_id: { value: [$gallery_id], modifier: INCLUDES }
               per_page: 20
               sort: "random"
             }
