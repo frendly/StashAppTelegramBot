@@ -1,6 +1,7 @@
 """Модуль для обработки голосований за изображения."""
 
 import logging
+import time
 from typing import List, Dict, Any, Optional
 
 from bot.database import Database
@@ -12,16 +13,22 @@ logger = logging.getLogger(__name__)
 class VotingManager:
     """Класс для управления системой голосования."""
     
-    def __init__(self, database: Database, stash_client: StashClient):
+    def __init__(self, database: Database, stash_client: StashClient, cache_ttl: int = 60):
         """
         Инициализация менеджера голосования.
         
         Args:
             database: База данных
             stash_client: Клиент StashApp
+            cache_ttl: Время жизни кэша в секундах (по умолчанию 60)
         """
         self.database = database
         self.stash_client = stash_client
+        self.cache_ttl = cache_ttl
+        
+        # Кэш для списков фильтрации
+        self._filtering_cache: Optional[Dict[str, List[str]]] = None
+        self._filtering_cache_time: float = 0
     
     async def process_vote(
         self,
@@ -177,14 +184,32 @@ class VotingManager:
     
     def get_filtering_lists(self) -> Dict[str, List[str]]:
         """
-        Получение списков для фильтрации изображений.
+        Получение списков для фильтрации изображений (с кэшированием).
         
         Returns:
             Dict: Словарь с blacklist и whitelist для перформеров и галерей
         """
-        return {
+        current_time = time.time()
+        
+        # Проверяем, актуален ли кэш
+        if self._filtering_cache is not None and (current_time - self._filtering_cache_time) < self.cache_ttl:
+            logger.debug(f"⏱️  Using cached filtering lists (age: {current_time - self._filtering_cache_time:.1f}s)")
+            return self._filtering_cache
+        
+        # Обновляем кэш
+        logger.debug("⏱️  Refreshing filtering lists cache")
+        self._filtering_cache = {
             'blacklisted_performers': self.database.get_blacklisted_performers(),
             'blacklisted_galleries': self.database.get_blacklisted_galleries(),
             'whitelisted_performers': self.database.get_whitelisted_performers(),
             'whitelisted_galleries': self.database.get_whitelisted_galleries()
         }
+        self._filtering_cache_time = current_time
+        
+        return self._filtering_cache
+    
+    def invalidate_filtering_cache(self):
+        """Инвалидация кэша фильтрации (вызывается после голосования)."""
+        logger.debug("⏱️  Invalidating filtering lists cache")
+        self._filtering_cache = None
+        self._filtering_cache_time = 0

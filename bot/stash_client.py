@@ -2,7 +2,10 @@
 
 import aiohttp
 import logging
+import time
 from typing import List, Optional, Dict, Any
+
+from bot.performance import timing_decorator
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,7 @@ class StashImage:
         paths = data.get('paths', {})
         self.image_url = paths.get('preview') or paths.get('image', '')
         
+        # Теги опциональны (могут не запрашиваться для ускорения)
         self.tags = [tag['name'] for tag in data.get('tags', [])]
         
         # Информация о галерее
@@ -112,6 +116,7 @@ class StashClient:
         if variables:
             payload["variables"] = variables
         
+        start_time = time.perf_counter()
         try:
             async with self.session.post(
                 self.api_url,
@@ -122,6 +127,9 @@ class StashClient:
                 response.raise_for_status()
                 data = await response.json()
                 
+                duration = time.perf_counter() - start_time
+                logger.debug(f"⏱️  GraphQL query executed: {duration:.3f}s")
+                
                 if 'errors' in data:
                     error_msg = data['errors'][0].get('message', 'Unknown error')
                     logger.error(f"GraphQL ошибка: {error_msg}")
@@ -130,7 +138,8 @@ class StashClient:
                 return data.get('data', {})
         
         except aiohttp.ClientError as e:
-            logger.error(f"Ошибка соединения с StashApp: {e}")
+            duration = time.perf_counter() - start_time
+            logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: {e}")
             raise Exception(f"Не удалось подключиться к StashApp: {e}")
     
     async def get_random_image(self, exclude_ids: Optional[List[str]] = None) -> Optional[StashImage]:
@@ -143,11 +152,14 @@ class StashClient:
         Returns:
             Optional[StashImage]: Случайное изображение или None
         """
+        start_time = time.perf_counter()
+        
         # Запрос с preview для оптимизации скорости загрузки
+        # Уменьшено до 20 изображений и убраны теги для ускорения
         query = """
         query FindRandomImage {
           findImages(
-            filter: { per_page: 50, sort: "random" }
+            filter: { per_page: 20, sort: "random" }
           ) {
             images {
               id
@@ -156,9 +168,6 @@ class StashClient:
               paths {
                 preview
                 image
-              }
-              tags {
-                name
               }
               galleries {
                 id
@@ -174,7 +183,10 @@ class StashClient:
         """
         
         try:
+            query_start = time.perf_counter()
             data = await self._execute_query(query)
+            query_duration = time.perf_counter() - query_start
+            
             images = data.get('findImages', {}).get('images', [])
             
             if not images:
@@ -182,10 +194,12 @@ class StashClient:
                 return None
             
             # Локальная фильтрация: исключаем изображения из exclude_ids
+            filter_start = time.perf_counter()
             if exclude_ids:
                 exclude_set = set(exclude_ids)
                 filtered_images = [img for img in images if img['id'] not in exclude_set]
-                logger.debug(f"Получено {len(images)} изображений, после фильтрации: {len(filtered_images)}")
+                filter_duration = time.perf_counter() - filter_start
+                logger.debug(f"Получено {len(images)} изображений, после фильтрации: {len(filtered_images)} ({filter_duration:.3f}s)")
                 
                 if not filtered_images:
                     logger.warning("После фильтрации не осталось изображений")
@@ -196,11 +210,14 @@ class StashClient:
             # Возвращаем первое подходящее изображение
             image_data = images[0]
             image = StashImage(image_data)
-            logger.info(f"Получено случайное изображение: {image}")
+            
+            total_duration = time.perf_counter() - start_time
+            logger.info(f"⏱️  get_random_image: {total_duration:.3f}s (query: {query_duration:.3f}s)")
             return image
         
         except Exception as e:
-            logger.error(f"Ошибка при получении случайного изображения: {e}")
+            duration = time.perf_counter() - start_time
+            logger.error(f"⏱️  get_random_image failed after {duration:.3f}s: {e}")
             return None
     
     async def get_random_image_with_retry(
@@ -243,6 +260,7 @@ class StashClient:
         if not self.session:
             raise RuntimeError("HTTP сессия не инициализирована")
         
+        start_time = time.perf_counter()
         try:
             # Добавляем API Key в URL как query параметр, если он есть
             download_url = image_url
@@ -253,11 +271,14 @@ class StashClient:
             async with self.session.get(download_url, auth=self.auth) as response:
                 response.raise_for_status()
                 image_data = await response.read()
-                logger.debug(f"Изображение скачано: {len(image_data)} байт")
+                duration = time.perf_counter() - start_time
+                size_kb = len(image_data) / 1024
+                logger.info(f"⏱️  Image download: {duration:.3f}s ({size_kb:.1f} KB, {size_kb/duration:.1f} KB/s)")
                 return image_data
         
         except aiohttp.ClientError as e:
-            logger.error(f"Ошибка при скачивании изображения: {e}")
+            duration = time.perf_counter() - start_time
+            logger.error(f"⏱️  Image download failed after {duration:.3f}s: {e}")
             return None
     
     async def test_connection(self) -> bool:
@@ -383,13 +404,17 @@ class StashClient:
         Returns:
             Optional[StashImage]: Случайное изображение или None
         """
+        start_time = time.perf_counter()
+        
         blacklisted_performers = blacklisted_performers or []
         blacklisted_galleries = blacklisted_galleries or []
         whitelisted_performers = whitelisted_performers or []
         whitelisted_galleries = whitelisted_galleries or []
         exclude_ids = exclude_ids or []
         
+        attempts_made = 0
         for attempt in range(max_retries):
+            attempts_made += 1
             try:
                 image = await self.get_random_image(exclude_ids)
                 if not image:
@@ -427,10 +452,13 @@ class StashClient:
                         exclude_ids.append(image.id)
                         continue
                 
+                duration = time.perf_counter() - start_time
+                logger.info(f"⏱️  get_random_image_weighted: {duration:.3f}s ({attempts_made} attempts)")
                 return image
                 
             except Exception as e:
                 logger.error(f"Попытка {attempt + 1}/{max_retries} не удалась: {e}")
         
-        logger.error(f"Не удалось получить изображение после {max_retries} попыток")
+        duration = time.perf_counter() - start_time
+        logger.error(f"⏱️  get_random_image_weighted failed after {duration:.3f}s ({attempts_made} attempts)")
         return None

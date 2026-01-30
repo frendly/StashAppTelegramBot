@@ -16,6 +16,7 @@ from telegram.error import TelegramError
 from bot.config import BotConfig
 from bot.stash_client import StashClient, StashImage
 from bot.database import Database
+from bot.performance import PerformanceTimer
 
 logger = logging.getLogger(__name__)
 
@@ -76,17 +77,23 @@ class TelegramHandler:
         Returns:
             bool: True если отправка успешна
         """
+        timer = PerformanceTimer("Send random photo")
+        timer.start()
+        
         try:
             # Получение списка недавно отправленных ID
             recent_ids = self.database.get_recent_image_ids(
                 self.config.history.avoid_recent_days
             )
+            timer.checkpoint("Get recent IDs from DB")
             
             logger.info(f"Запрос случайного фото (исключая {len(recent_ids)} недавних)")
             
             # Получение случайного изображения с учетом предпочтений
             if self.voting_manager:
                 filtering_lists = self.voting_manager.get_filtering_lists()
+                timer.checkpoint("Get filtering lists from DB")
+                
                 image = await self.stash_client.get_random_image_weighted(
                     exclude_ids=recent_ids,
                     blacklisted_performers=filtering_lists['blacklisted_performers'],
@@ -95,12 +102,14 @@ class TelegramHandler:
                     whitelisted_galleries=filtering_lists['whitelisted_galleries'],
                     max_retries=5
                 )
+                timer.checkpoint("Get random image (weighted)")
             else:
                 # Fallback на обычный метод, если voting_manager не инициализирован
                 image = await self.stash_client.get_random_image_with_retry(
                     exclude_ids=recent_ids,
                     max_retries=5
                 )
+                timer.checkpoint("Get random image (simple)")
             
             if not image:
                 logger.error("Не удалось получить случайное изображение")
@@ -113,6 +122,7 @@ class TelegramHandler:
             
             # Скачивание изображения
             image_data = await self.stash_client.download_image(image.image_url)
+            timer.checkpoint("Download image")
             
             if not image_data:
                 logger.error(f"Не удалось скачать изображение {image.id}")
@@ -136,6 +146,7 @@ class TelegramHandler:
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             # Отправка фото
+            send_start = time.perf_counter()
             if context:
                 await context.bot.send_photo(
                     chat_id=chat_id,
@@ -154,6 +165,7 @@ class TelegramHandler:
                         parse_mode='HTML',
                         reply_markup=reply_markup
                     )
+            timer.checkpoint("Send to Telegram")
             
             # Сохранение изображения в кэш для обработки голосования
             if user_id:
@@ -165,15 +177,19 @@ class TelegramHandler:
                 user_id=user_id,
                 title=image.title
             )
+            timer.checkpoint("Save to database")
             
+            timer.end()
             logger.info(f"Фото успешно отправлено: {image.id}")
             return True
         
         except TelegramError as e:
             logger.error(f"Ошибка Telegram при отправке фото: {e}")
+            timer.end()
             return False
         except Exception as e:
             logger.error(f"Неожиданная ошибка при отправке фото: {e}")
+            timer.end()
             return False
     
     def _format_caption(self, image: StashImage) -> str:

@@ -3,6 +3,7 @@
 import sqlite3
 import logging
 import json
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -134,6 +135,7 @@ class Database:
         Returns:
             List[str]: Список ID изображений
         """
+        start_time = time.perf_counter()
         cutoff_date = datetime.now() - timedelta(days=days)
         
         with sqlite3.connect(self.db_path) as conn:
@@ -146,7 +148,9 @@ class Database:
             
             results = cursor.fetchall()
             image_ids = [row[0] for row in results]
-            logger.debug(f"Найдено {len(image_ids)} изображений за последние {days} дней")
+            
+            duration = time.perf_counter() - start_time
+            logger.debug(f"⏱️  DB get_recent_image_ids: {duration:.3f}s ({len(image_ids)} items, {days} days)")
             return image_ids
     
     def is_recently_sent(self, image_id: str, days: int) -> bool:
@@ -490,6 +494,7 @@ class Database:
         Returns:
             List[str]: Список ID перформеров
         """
+        start_time = time.perf_counter()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -499,7 +504,11 @@ class Database:
             """)
             
             results = cursor.fetchall()
-            return [row[0] for row in results]
+            ids = [row[0] for row in results]
+            
+            duration = time.perf_counter() - start_time
+            logger.debug(f"⏱️  DB get_blacklisted_performers: {duration:.3f}s ({len(ids)} items)")
+            return ids
     
     def get_blacklisted_galleries(self) -> List[str]:
         """
@@ -508,6 +517,7 @@ class Database:
         Returns:
             List[str]: Список ID галерей
         """
+        start_time = time.perf_counter()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -517,7 +527,11 @@ class Database:
             """)
             
             results = cursor.fetchall()
-            return [row[0] for row in results]
+            ids = [row[0] for row in results]
+            
+            duration = time.perf_counter() - start_time
+            logger.debug(f"⏱️  DB get_blacklisted_galleries: {duration:.3f}s ({len(ids)} items)")
+            return ids
     
     def get_whitelisted_performers(self) -> List[str]:
         """
@@ -526,6 +540,7 @@ class Database:
         Returns:
             List[str]: Список ID перформеров
         """
+        start_time = time.perf_counter()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -536,7 +551,11 @@ class Database:
             """)
             
             results = cursor.fetchall()
-            return [row[0] for row in results]
+            ids = [row[0] for row in results]
+            
+            duration = time.perf_counter() - start_time
+            logger.debug(f"⏱️  DB get_whitelisted_performers: {duration:.3f}s ({len(ids)} items)")
+            return ids
     
     def get_whitelisted_galleries(self) -> List[str]:
         """
@@ -545,6 +564,7 @@ class Database:
         Returns:
             List[str]: Список ID галерей
         """
+        start_time = time.perf_counter()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -555,7 +575,11 @@ class Database:
             """)
             
             results = cursor.fetchall()
-            return [row[0] for row in results]
+            ids = [row[0] for row in results]
+            
+            duration = time.perf_counter() - start_time
+            logger.debug(f"⏱️  DB get_whitelisted_galleries: {duration:.3f}s ({len(ids)} items)")
+            return ids
     
     def get_gallery_preference(self, gallery_id: str) -> Optional[Dict[str, Any]]:
         """
