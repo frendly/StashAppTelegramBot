@@ -121,7 +121,9 @@ class Bot:
             logger.info("Инициализация планировщика...")
             self.scheduler = Scheduler(
                 config=self.config,
-                telegram_handler=self.telegram_handler
+                telegram_handler=self.telegram_handler,
+                database=self.database,
+                stash_client=self.stash_client
             )
             self.scheduler.setup()
             

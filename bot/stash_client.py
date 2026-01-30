@@ -382,6 +382,43 @@ class StashClient:
             logger.error(f"Ошибка при обновлении рейтинга галереи {gallery_id}: {e}")
             return False
     
+    async def get_gallery_image_count(self, gallery_id: str) -> Optional[int]:
+        """
+        Получение количества изображений в галерее.
+        
+        Args:
+            gallery_id: ID галереи
+            
+        Returns:
+            Optional[int]: Количество изображений или None при ошибке
+        """
+        query = """
+        query GetGalleryImageCount($id: ID!) {
+          findGallery(id: $id) {
+            image_count
+          }
+        }
+        """
+        
+        variables = {
+            "id": gallery_id
+        }
+        
+        try:
+            data = await self._execute_query(query, variables)
+            gallery = data.get('findGallery')
+            
+            if gallery and 'image_count' in gallery:
+                count = gallery['image_count']
+                logger.debug(f"Количество изображений в галерее {gallery_id}: {count}")
+                return count
+            
+            logger.warning(f"Галерея {gallery_id} не найдена или не содержит image_count")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка при получении количества изображений для галереи {gallery_id}: {e}")
+            return None
+    
     async def get_random_image_weighted(
         self,
         exclude_ids: Optional[List[str]] = None,

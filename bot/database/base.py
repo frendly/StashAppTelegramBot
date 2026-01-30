@@ -125,6 +125,14 @@ class DatabaseBase:
                 cursor.execute("ALTER TABLE gallery_preferences ADD COLUMN threshold_notification_shown BOOLEAN DEFAULT FALSE")
                 logger.info("Добавлено поле threshold_notification_shown в gallery_preferences")
             
+            if 'total_images' not in existing_columns:
+                cursor.execute("ALTER TABLE gallery_preferences ADD COLUMN total_images INTEGER DEFAULT 0")
+                logger.info("Добавлено поле total_images в gallery_preferences")
+            
+            if 'images_count_updated_at' not in existing_columns:
+                cursor.execute("ALTER TABLE gallery_preferences ADD COLUMN images_count_updated_at TIMESTAMP")
+                logger.info("Добавлено поле images_count_updated_at в gallery_preferences")
+            
             # Миграция существующих записей: установить weight = 1.0 для записей без веса
             cursor.execute("UPDATE gallery_preferences SET weight = 1.0 WHERE weight IS NULL")
             

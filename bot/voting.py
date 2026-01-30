@@ -102,6 +102,20 @@ class VotingManager:
                 except Exception as e:
                     logger.warning(f"Ошибка при обновлении веса галереи {image.gallery_id}: {e}")
                 
+                # 4.2. Обновляем статистику галереи (количество изображений)
+                try:
+                    if self.database.should_update_image_count(image.gallery_id, days_threshold=7):
+                        logger.debug(f"Обновление количества изображений для галереи {image.gallery_id}")
+                        image_count = await self.stash_client.get_gallery_image_count(image.gallery_id)
+                        
+                        if image_count is not None:
+                            self.database.update_gallery_image_count(image.gallery_id, image_count)
+                            logger.debug(f"Количество изображений для галереи '{image.gallery_title}' обновлено: {image_count}")
+                        else:
+                            logger.warning(f"Не удалось получить количество изображений для галереи {image.gallery_id}")
+                except Exception as e:
+                    logger.warning(f"Ошибка при обновлении статистики галереи {image.gallery_id}: {e}")
+                
                 # 5. Если достигнут порог в 5 голосов, устанавливаем рейтинг галереи
                 if should_update_gallery:
                     gallery_pref = self.database.get_gallery_preference(image.gallery_id)

@@ -14,16 +14,26 @@ logger = logging.getLogger(__name__)
 class Scheduler:
     """Класс для управления планировщиком автоматической отправки."""
     
-    def __init__(self, config: BotConfig, telegram_handler: TelegramHandler):
+    def __init__(
+        self, 
+        config: BotConfig, 
+        telegram_handler: TelegramHandler,
+        database=None,
+        stash_client=None
+    ):
         """
         Инициализация планировщика.
         
         Args:
             config: Конфигурация бота
             telegram_handler: Обработчик Telegram команд
+            database: База данных (опционально, для фоновых задач)
+            stash_client: Клиент StashApp (опционально, для фоновых задач)
         """
         self.config = config
         self.telegram_handler = telegram_handler
+        self.database = database
+        self.stash_client = stash_client
         self.scheduler = AsyncIOScheduler()
     
     def setup(self):
@@ -70,6 +80,25 @@ class Scheduler:
                     f"по расписанию {self.config.scheduler.cron}"
                 )
             
+            # Добавление задачи обновления статистики галерей (раз в день в 3:00)
+            if self.database and self.stash_client:
+                stats_trigger = CronTrigger(
+                    minute=0,
+                    hour=3,
+                    day='*',
+                    month='*',
+                    day_of_week='*',
+                    timezone=tz
+                )
+                self.scheduler.add_job(
+                    self._update_gallery_statistics,
+                    trigger=stats_trigger,
+                    id="update_gallery_statistics",
+                    name="Обновление статистики галерей",
+                    replace_existing=True
+                )
+                logger.info("Задача добавлена: обновление статистики галерей (ежедневно в 3:00)")
+            
             logger.info(
                 f"Планировщик настроен: cron='{self.config.scheduler.cron}', "
                 f"timezone='{self.config.scheduler.timezone}'"
@@ -90,6 +119,60 @@ class Scheduler:
             await self.telegram_handler.send_scheduled_photo(chat_id=user_id)
         except Exception as e:
             logger.error(f"Ошибка при отправке запланированного фото: {e}")
+    
+    async def _update_gallery_statistics(self):
+        """
+        Фоновая задача обновления статистики галерей.
+        
+        Обновляет количество изображений для всех галерей, которым нужно обновление.
+        """
+        if not self.database or not self.stash_client:
+            logger.warning("Не удалось обновить статистику: database или stash_client не инициализированы")
+            return
+        
+        try:
+            logger.info("Начало обновления статистики галерей...")
+            galleries = self.database.get_galleries_needing_update(days_threshold=7)
+            
+            if not galleries:
+                logger.info("Нет галерей, требующих обновления статистики")
+                return
+            
+            logger.info(f"Найдено галерей для обновления: {len(galleries)}")
+            
+            updated_count = 0
+            error_count = 0
+            
+            for gallery in galleries:
+                gallery_id = gallery['gallery_id']
+                gallery_title = gallery['gallery_title']
+                
+                try:
+                    image_count = await self.stash_client.get_gallery_image_count(gallery_id)
+                    
+                    if image_count is not None:
+                        success = self.database.update_gallery_image_count(gallery_id, image_count)
+                        if success:
+                            updated_count += 1
+                            logger.debug(f"Обновлена статистика галереи '{gallery_title}': {image_count} изображений")
+                        else:
+                            error_count += 1
+                            logger.warning(f"Не удалось обновить статистику галереи '{gallery_title}'")
+                    else:
+                        error_count += 1
+                        logger.warning(f"Не удалось получить количество изображений для галереи '{gallery_title}'")
+                
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"Ошибка при обновлении статистики галереи '{gallery_title}': {e}")
+            
+            logger.info(
+                f"Обновление статистики завершено: обновлено {updated_count}, "
+                f"ошибок {error_count} из {len(galleries)} галерей"
+            )
+        
+        except Exception as e:
+            logger.error(f"Критическая ошибка при обновлении статистики галерей: {e}", exc_info=True)
     
     def start(self):
         """Запуск планировщика."""

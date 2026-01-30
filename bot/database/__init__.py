@@ -5,6 +5,7 @@ from .sent_photos import SentPhotosRepository
 from .votes import VotesRepository
 from .preferences import PreferencesRepository
 from .weights import WeightsRepository
+from .statistics import StatisticsRepository
 
 
 class Database(DatabaseBase):
@@ -24,6 +25,7 @@ class Database(DatabaseBase):
         self.votes_repo = VotesRepository(self.db_path)
         self.preferences_repo = PreferencesRepository(self.db_path)
         self.weights_repo = WeightsRepository(self.db_path)
+        self.statistics_repo = StatisticsRepository(self.db_path)
         
         # Делегирование методов для обратной совместимости
         # Sent photos methods
@@ -57,6 +59,13 @@ class Database(DatabaseBase):
         self.get_gallery_weight = self.weights_repo.get_gallery_weight
         self.update_gallery_weight = self.weights_repo.update_gallery_weight
         self.get_all_gallery_weights = self.weights_repo.get_all_gallery_weights
+        
+        # Statistics methods
+        self.update_gallery_image_count = self.statistics_repo.update_gallery_image_count
+        self.get_gallery_statistics = self.statistics_repo.get_gallery_statistics
+        self.calculate_negative_percentage = self.statistics_repo.calculate_negative_percentage
+        self.get_galleries_needing_update = self.statistics_repo.get_galleries_needing_update
+        self.should_update_image_count = self.statistics_repo.should_update_image_count
 
 
 # Экспорт для обратной совместимости
