@@ -104,6 +104,9 @@ class Bot:
             # Настройка обработчиков команд
             self.telegram_handler.setup_handlers(self.application)
             
+            # Настройка меню команд
+            await self.telegram_handler.setup_bot_menu()
+            
             # Инициализация планировщика
             logger.info("Инициализация планировщика...")
             self.scheduler = Scheduler(

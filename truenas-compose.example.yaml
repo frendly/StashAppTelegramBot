@@ -1,0 +1,53 @@
+services:
+  stash-telegram-bot:
+    container_name: stash-telegram-bot
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    environment:
+      - TZ=Europe/Moscow
+      - LOG_PATH=/dev/null
+    healthcheck:
+      interval: 60s
+      retries: 3
+      start_period: 30s
+      test:
+        - CMD
+        - python
+        - '-c'
+        - import os; exit(0 if os.path.exists('/data/sent_photos.db') else 1)
+      timeout: 10s
+    image: ghcr.io/frendly/stashapptelegrambot:latest
+    logging:
+      driver: json-file
+      options:
+        max-file: '3'
+        max-size: 10m
+    restart: unless-stopped
+    user: '568:568'
+    volumes:
+      - read_only: True
+        source: /mnt/apps/stash-telegram-bot/config
+        target: /config
+        type: bind
+      - read_only: False
+        source: /mnt/apps/stash-telegram-bot/data
+        target: /data
+        type: bind
+  watchtower:
+    command: stash-telegram-bot
+    container_name: watchtower
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_MONITOR_ONLY=false
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+version: '3.8'

@@ -305,3 +305,16 @@ class TelegramHandler:
         application.add_handler(CommandHandler("stats", self.stats_command))
         
         logger.info("Обработчики команд настроены")
+    
+    async def setup_bot_menu(self):
+        """Настройка меню команд бота."""
+        from telegram import BotCommand
+        
+        commands = [
+            BotCommand("random", "Случайное фото"),
+            BotCommand("stats", "Статистика"),
+            BotCommand("help", "Справка")
+        ]
+        
+        await self.application.bot.set_my_commands(commands)
+        logger.info("Меню команд установлено")
