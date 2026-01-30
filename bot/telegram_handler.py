@@ -386,12 +386,12 @@ class TelegramHandler:
             await update.message.reply_text("❌ У вас нет доступа к этому боту.")
             return
         
-        # Rate limiting - не чаще 1 раза в 3 секунды
+        # Rate limiting - не чаще 1 раза в 2 секунды
         now = time.time()
         if user_id in self._last_command_time:
             time_passed = now - self._last_command_time[user_id]
-            if time_passed < 3:
-                wait_time = int(3 - time_passed)
+            if time_passed < 2:
+                wait_time = int(2 - time_passed)
                 await update.message.reply_text(
                     f"⏳ Подождите {wait_time} секунд перед следующим запросом.",
                     reply_markup=self._get_persistent_keyboard()
@@ -430,12 +430,12 @@ class TelegramHandler:
         
         # Обработка кнопки Random
         if text == "💕 Random":
-            # Rate limiting - не чаще 1 раза в 3 секунды
+            # Rate limiting - не чаще 1 раза в 2 секунды
             now = time.time()
             if user_id in self._last_command_time:
                 time_passed = now - self._last_command_time[user_id]
-                if time_passed < 3:
-                    wait_time = int(3 - time_passed)
+                if time_passed < 2:
+                    wait_time = int(2 - time_passed)
                     await update.message.reply_text(
                         f"⏳ Подождите {wait_time} секунд перед следующим запросом.",
                         reply_markup=self._get_persistent_keyboard()
@@ -704,13 +704,13 @@ class TelegramHandler:
             # Инвалидация кэша фильтрации после голосования
             self.voting_manager.invalidate_filtering_cache()
             
-            # Rate limiting - не чаще 1 раза в 3 секунды
+            # Rate limiting - не чаще 1 раза в 2 секунды
             chat_id = query.message.chat_id
             now = time.time()
             if user_id in self._last_command_time:
                 time_passed = now - self._last_command_time[user_id]
-                if time_passed < 3:
-                    wait_time = int(3 - time_passed)
+                if time_passed < 2:
+                    wait_time = int(2 - time_passed)
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text=f"⏳ Подождите {wait_time} секунд перед следующим запросом."
