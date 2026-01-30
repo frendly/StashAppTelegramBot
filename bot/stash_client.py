@@ -11,6 +11,49 @@ from bot.performance import timing_decorator
 logger = logging.getLogger(__name__)
 
 
+def select_gallery_by_weight(weights_dict: Dict[str, float]) -> Optional[str]:
+    """
+    Взвешенный случайный выбор галереи на основе весов.
+    
+    Алгоритм:
+    1. Вычисляет сумму всех весов
+    2. Генерирует случайное число от 0 до суммы
+    3. Проходит по галереям, накапливая веса, пока не превысит случайное число
+    
+    Args:
+        weights_dict: Словарь {gallery_id: weight} с весами галерей
+        
+    Returns:
+        Optional[str]: ID выбранной галереи или None если словарь пуст
+    """
+    if not weights_dict:
+        return None
+    
+    # Вычисляем сумму всех весов
+    total_weight = sum(weights_dict.values())
+    
+    if total_weight <= 0:
+        logger.warning("Сумма весов галерей <= 0, невозможно выбрать галерею")
+        return None
+    
+    # Генерируем случайное число от 0 до суммы весов
+    random_value = random.uniform(0, total_weight)
+    
+    # Проходим по галереям, накапливая веса
+    accumulated_weight = 0.0
+    for gallery_id, weight in weights_dict.items():
+        accumulated_weight += weight
+        if random_value <= accumulated_weight:
+            logger.debug(f"Выбрана галерея {gallery_id} с весом {weight:.3f} (random={random_value:.3f}, total={total_weight:.3f})")
+            return gallery_id
+    
+    # На всякий случай (не должно произойти из-за floating point ошибок)
+    # Возвращаем последнюю галерею
+    last_gallery_id = list(weights_dict.keys())[-1]
+    logger.warning(f"Floating point edge case: возвращаем последнюю галерею {last_gallery_id}")
+    return last_gallery_id
+
+
 class StashImage:
     """Класс представляющий изображение из StashApp."""
     
