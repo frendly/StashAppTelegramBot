@@ -588,3 +588,26 @@ class Database:
                 'negative_votes': result[4],
                 'score': result[5]
             }
+    
+    def get_total_votes_count(self) -> Dict[str, int]:
+        """
+        Получение общего количества голосов.
+        
+        Returns:
+            Dict: Словарь с количеством всех голосов, положительных и отрицательных
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN vote > 0 THEN 1 ELSE 0 END) as positive,
+                       SUM(CASE WHEN vote < 0 THEN 1 ELSE 0 END) as negative
+                FROM votes
+            """)
+            
+            result = cursor.fetchone()
+            return {
+                'total': result[0] if result[0] else 0,
+                'positive': result[1] if result[1] else 0,
+                'negative': result[2] if result[2] else 0
+            }

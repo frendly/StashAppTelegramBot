@@ -304,12 +304,22 @@ class TelegramHandler:
         total_sent = self.database.get_total_sent_count()
         user_sent = self.database.get_user_sent_count(user_id)
         last_photo = self.database.get_last_sent_photo()
+        votes_stats = self.database.get_total_votes_count()
         
         stats_message = (
             "<b>📊 Статистика бота</b>\n\n"
             f"📸 Всего отправлено фото: <b>{total_sent}</b>\n"
             f"👤 Отправлено вам: <b>{user_sent}</b>\n"
         )
+        
+        # Добавление статистики по голосам
+        if votes_stats['total'] > 0:
+            stats_message += (
+                f"\n<b>🗳 Голосование:</b>\n"
+                f"Всего голосов: <b>{votes_stats['total']}</b>\n"
+                f"👍 Положительных: <b>{votes_stats['positive']}</b>\n"
+                f"👎 Отрицательных: <b>{votes_stats['negative']}</b>\n"
+            )
         
         if last_photo:
             image_id, sent_at, title = last_photo
