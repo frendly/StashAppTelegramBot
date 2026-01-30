@@ -26,9 +26,20 @@ class StashImage:
         self.image_url = paths.get('preview') or paths.get('image', '')
         
         self.tags = [tag['name'] for tag in data.get('tags', [])]
+        
+        # Информация о галерее
+        galleries = data.get('galleries', [])
+        self.gallery_id = galleries[0]['id'] if galleries else None
+        self.gallery_title = galleries[0]['title'] if galleries else None
+        
+        # Информация о перформерах
+        self.performers = [
+            {'id': p['id'], 'name': p['name']} 
+            for p in data.get('performers', [])
+        ]
     
     def __repr__(self):
-        return f"StashImage(id={self.id}, title={self.title}, rating={self.rating})"
+        return f"StashImage(id={self.id}, title={self.title}, rating={self.rating}, gallery={self.gallery_title})"
 
 
 class StashClient:
@@ -149,6 +160,14 @@ class StashClient:
               tags {
                 name
               }
+              galleries {
+                id
+                title
+              }
+              performers {
+                id
+                name
+              }
             }
           }
         }
@@ -264,3 +283,154 @@ class StashClient:
         except Exception as e:
             logger.error(f"Не удалось подключиться к StashApp: {e}")
             return False
+    
+    async def update_image_rating(self, image_id: str, rating: int) -> bool:
+        """
+        Обновление рейтинга изображения.
+        
+        Args:
+            image_id: ID изображения
+            rating: Рейтинг (1-5, будет преобразован в rating100)
+            
+        Returns:
+            bool: True если обновление успешно
+        """
+        # Преобразуем rating (1-5) в rating100 (0-100)
+        rating100 = rating * 20
+        
+        mutation = """
+        mutation ImageUpdate($id: ID!, $rating: Int!) {
+          imageUpdate(input: { id: $id, rating100: $rating }) {
+            id
+            rating100
+          }
+        }
+        """
+        
+        variables = {
+            "id": image_id,
+            "rating": rating100
+        }
+        
+        try:
+            data = await self._execute_query(mutation, variables)
+            if data.get('imageUpdate'):
+                logger.info(f"Рейтинг изображения {image_id} обновлен на {rating}/5 ({rating100}/100)")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении рейтинга изображения {image_id}: {e}")
+            return False
+    
+    async def update_gallery_rating(self, gallery_id: str, rating: int) -> bool:
+        """
+        Обновление рейтинга галереи.
+        
+        Args:
+            gallery_id: ID галереи
+            rating: Рейтинг (1-5, будет преобразован в rating100)
+            
+        Returns:
+            bool: True если обновление успешно
+        """
+        # Преобразуем rating (1-5) в rating100 (0-100)
+        rating100 = rating * 20
+        
+        mutation = """
+        mutation GalleryUpdate($id: ID!, $rating: Int!) {
+          galleryUpdate(input: { id: $id, rating100: $rating }) {
+            id
+            rating100
+          }
+        }
+        """
+        
+        variables = {
+            "id": gallery_id,
+            "rating": rating100
+        }
+        
+        try:
+            data = await self._execute_query(mutation, variables)
+            if data.get('galleryUpdate'):
+                logger.info(f"Рейтинг галереи {gallery_id} обновлен на {rating}/5 ({rating100}/100)")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении рейтинга галереи {gallery_id}: {e}")
+            return False
+    
+    async def get_random_image_weighted(
+        self,
+        exclude_ids: Optional[List[str]] = None,
+        blacklisted_performers: Optional[List[str]] = None,
+        blacklisted_galleries: Optional[List[str]] = None,
+        whitelisted_performers: Optional[List[str]] = None,
+        whitelisted_galleries: Optional[List[str]] = None,
+        max_retries: int = 3
+    ) -> Optional[StashImage]:
+        """
+        Получение случайного изображения с учетом предпочтений.
+        
+        Args:
+            exclude_ids: Список ID изображений для исключения
+            blacklisted_performers: Список ID перформеров для исключения
+            blacklisted_galleries: Список ID галерей для исключения
+            whitelisted_performers: Список ID предпочитаемых перформеров
+            whitelisted_galleries: Список ID предпочитаемых галерей
+            max_retries: Максимальное количество попыток
+            
+        Returns:
+            Optional[StashImage]: Случайное изображение или None
+        """
+        blacklisted_performers = blacklisted_performers or []
+        blacklisted_galleries = blacklisted_galleries or []
+        whitelisted_performers = whitelisted_performers or []
+        whitelisted_galleries = whitelisted_galleries or []
+        exclude_ids = exclude_ids or []
+        
+        for attempt in range(max_retries):
+            try:
+                image = await self.get_random_image(exclude_ids)
+                if not image:
+                    logger.warning(f"Попытка {attempt + 1}/{max_retries}: изображение не найдено")
+                    continue
+                
+                # Проверяем blacklist для галерей
+                if image.gallery_id and image.gallery_id in blacklisted_galleries:
+                    logger.debug(f"Изображение {image.id} исключено: галерея в blacklist")
+                    exclude_ids.append(image.id)
+                    continue
+                
+                # Проверяем blacklist для перформеров
+                performer_ids = [p['id'] for p in image.performers]
+                if any(pid in blacklisted_performers for pid in performer_ids):
+                    logger.debug(f"Изображение {image.id} исключено: перформер в blacklist")
+                    exclude_ids.append(image.id)
+                    continue
+                
+                # Приоритизируем whitelist
+                is_whitelisted = False
+                if image.gallery_id and image.gallery_id in whitelisted_galleries:
+                    is_whitelisted = True
+                    logger.debug(f"Изображение {image.id} из предпочитаемой галереи")
+                
+                if any(pid in whitelisted_performers for pid in performer_ids):
+                    is_whitelisted = True
+                    logger.debug(f"Изображение {image.id} с предпочитаемым перформером")
+                
+                # Если есть whitelist и изображение не в нем, пропускаем с вероятностью 50%
+                if (whitelisted_performers or whitelisted_galleries) and not is_whitelisted:
+                    import random
+                    if random.random() < 0.5:
+                        logger.debug(f"Изображение {image.id} пропущено: не в whitelist")
+                        exclude_ids.append(image.id)
+                        continue
+                
+                return image
+                
+            except Exception as e:
+                logger.error(f"Попытка {attempt + 1}/{max_retries} не удалась: {e}")
+        
+        logger.error(f"Не удалось получить изображение после {max_retries} попыток")
+        return None

@@ -15,6 +15,7 @@ from bot.database import Database
 from bot.stash_client import StashClient
 from bot.telegram_handler import TelegramHandler
 from bot.scheduler import Scheduler
+from bot.voting import VotingManager
 
 # Настройка логирования
 log_path = os.getenv('LOG_PATH', 'bot.log')
@@ -45,6 +46,7 @@ class Bot:
         self.config: BotConfig = None
         self.database: Database = None
         self.stash_client: StashClient = None
+        self.voting_manager: VotingManager = None
         self.telegram_handler: TelegramHandler = None
         self.scheduler: Scheduler = None
         self.application: Application = None
@@ -87,12 +89,20 @@ class Bot:
             else:
                 logger.info("✅ Подключение к StashApp успешно")
             
+            # Инициализация менеджера голосования
+            logger.info("Инициализация менеджера голосования...")
+            self.voting_manager = VotingManager(
+                database=self.database,
+                stash_client=self.stash_client
+            )
+            
             # Инициализация Telegram обработчиков
             logger.info("Инициализация Telegram обработчиков...")
             self.telegram_handler = TelegramHandler(
                 config=self.config,
                 stash_client=self.stash_client,
-                database=self.database
+                database=self.database,
+                voting_manager=self.voting_manager
             )
             
             # Создание Telegram Application

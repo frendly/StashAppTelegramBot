@@ -3,10 +3,11 @@
 import logging
 import time
 from typing import Optional, Dict
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters
 )
@@ -26,7 +27,8 @@ class TelegramHandler:
         self,
         config: BotConfig,
         stash_client: StashClient,
-        database: Database
+        database: Database,
+        voting_manager = None  # Type hint avoided to prevent circular import
     ):
         """
         Инициализация обработчика.
@@ -35,12 +37,15 @@ class TelegramHandler:
             config: Конфигурация бота
             stash_client: Клиент StashApp
             database: База данных
+            voting_manager: Менеджер голосования (опционально)
         """
         self.config = config
         self.stash_client = stash_client
         self.database = database
+        self.voting_manager = voting_manager
         self.application: Optional[Application] = None
         self._last_command_time: Dict[int, float] = {}  # Rate limiting
+        self._last_sent_images: Dict[int, StashImage] = {}  # Кэш последних отправленных изображений
     
     def _is_authorized(self, user_id: int) -> bool:
         """
@@ -79,11 +84,23 @@ class TelegramHandler:
             
             logger.info(f"Запрос случайного фото (исключая {len(recent_ids)} недавних)")
             
-            # Получение случайного изображения
-            image = await self.stash_client.get_random_image_with_retry(
-                exclude_ids=recent_ids,
-                max_retries=5
-            )
+            # Получение случайного изображения с учетом предпочтений
+            if self.voting_manager:
+                filtering_lists = self.voting_manager.get_filtering_lists()
+                image = await self.stash_client.get_random_image_weighted(
+                    exclude_ids=recent_ids,
+                    blacklisted_performers=filtering_lists['blacklisted_performers'],
+                    blacklisted_galleries=filtering_lists['blacklisted_galleries'],
+                    whitelisted_performers=filtering_lists['whitelisted_performers'],
+                    whitelisted_galleries=filtering_lists['whitelisted_galleries'],
+                    max_retries=5
+                )
+            else:
+                # Fallback на обычный метод, если voting_manager не инициализирован
+                image = await self.stash_client.get_random_image_with_retry(
+                    exclude_ids=recent_ids,
+                    max_retries=5
+                )
             
             if not image:
                 logger.error("Не удалось получить случайное изображение")
@@ -109,13 +126,23 @@ class TelegramHandler:
             # Формирование подписи
             caption = self._format_caption(image)
             
+            # Создание кнопок для голосования
+            keyboard = [
+                [
+                    InlineKeyboardButton("👍", callback_data=f"vote_up_{image.id}"),
+                    InlineKeyboardButton("👎", callback_data=f"vote_down_{image.id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             # Отправка фото
             if context:
                 await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=image_data,
                     caption=caption,
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
             else:
                 # Для планировщика используем application
@@ -124,8 +151,13 @@ class TelegramHandler:
                         chat_id=chat_id,
                         photo=image_data,
                         caption=caption,
-                        parse_mode='HTML'
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
                     )
+            
+            # Сохранение изображения в кэш для обработки голосования
+            if user_id:
+                self._last_sent_images[user_id] = image
             
             # Сохранение в базу данных
             self.database.add_sent_photo(
@@ -183,6 +215,7 @@ class TelegramHandler:
             "Доступные команды:\n"
             "/random - Получить случайное фото\n"
             "/stats - Показать статистику\n"
+            "/preferences - Показать предпочтения\n"
             "/help - Показать эту справку\n\n"
             "📅 Автоматическая отправка: "
             f"{'включена ✅' if self.config.scheduler.enabled else 'выключена ❌'}"
@@ -204,10 +237,16 @@ class TelegramHandler:
             "<b>Команды:</b>\n"
             "/random - Получить случайное фото из коллекции\n"
             "/stats - Показать статистику отправленных фото\n"
+            "/preferences - Показать ваши предпочтения\n"
             "/help - Показать эту справку\n\n"
             "<b>О боте:</b>\n"
             "Бот отправляет случайные фотографии из вашей StashApp коллекции.\n"
             f"Фото не повторяются в течение {self.config.history.avoid_recent_days} дней.\n\n"
+            "<b>Голосование:</b>\n"
+            "Под каждым фото есть кнопки 👍 и 👎.\n"
+            "• 👍 - ставит рейтинг 5/5 фото и запоминает перформеров/галерею\n"
+            "• 👎 - ставит рейтинг 1/5 и фильтрует похожий контент\n"
+            "После 5+ голосов галерея получает средний рейтинг автоматически.\n\n"
             f"<b>Расписание:</b> {self.config.scheduler.cron if self.config.scheduler.enabled else 'Не настроено'}"
         )
         
@@ -279,6 +318,89 @@ class TelegramHandler:
         
         await update.message.reply_text(stats_message, parse_mode='HTML')
     
+    async def preferences_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /preferences."""
+        user_id = update.effective_user.id
+        
+        if not self._is_authorized(user_id):
+            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
+            return
+        
+        if not self.voting_manager:
+            await update.message.reply_text("⚠️ Система голосования недоступна.")
+            return
+        
+        logger.info(f"Команда /preferences от user_id={user_id}")
+        
+        # Получение сводки предпочтений
+        summary = self.voting_manager.get_preferences_summary()
+        
+        prefs_message = "<b>📊 Ваши предпочтения</b>\n\n"
+        
+        # Топ перформеров
+        if summary['top_performers']:
+            prefs_message += "<b>👍 Любимые перформеры:</b>\n"
+            for i, p in enumerate(summary['top_performers'], 1):
+                name = p['performer_name']
+                display_name = f"{name[:25]}..." if len(name) > 25 else name
+                prefs_message += (
+                    f"{i}. {display_name} "
+                    f"(👍 {p['positive_votes']} / 👎 {p['negative_votes']}, "
+                    f"score: {p['score']:.2f})\n"
+                )
+            prefs_message += "\n"
+        
+        # Нелюбимые перформеры
+        if summary['worst_performers']:
+            prefs_message += "<b>👎 Нелюбимые перформеры:</b>\n"
+            for i, p in enumerate(summary['worst_performers'], 1):
+                name = p['performer_name']
+                display_name = f"{name[:25]}..." if len(name) > 25 else name
+                prefs_message += (
+                    f"{i}. {display_name} "
+                    f"(👍 {p['positive_votes']} / 👎 {p['negative_votes']}, "
+                    f"score: {p['score']:.2f})\n"
+                )
+            prefs_message += "\n"
+        
+        # Топ галерей
+        if summary['top_galleries']:
+            prefs_message += "<b>👍 Любимые галереи:</b>\n"
+            for i, g in enumerate(summary['top_galleries'], 1):
+                title = g['gallery_title']
+                display_title = f"{title[:30]}..." if len(title) > 30 else title
+                prefs_message += (
+                    f"{i}. {display_title} "
+                    f"(👍 {g['positive_votes']} / 👎 {g['negative_votes']}, "
+                    f"score: {g['score']:.2f})\n"
+                )
+            prefs_message += "\n"
+        
+        # Нелюбимые галереи
+        if summary['worst_galleries']:
+            prefs_message += "<b>👎 Нелюбимые галереи:</b>\n"
+            for i, g in enumerate(summary['worst_galleries'], 1):
+                title = g['gallery_title']
+                display_title = f"{title[:30]}..." if len(title) > 30 else title
+                prefs_message += (
+                    f"{i}. {display_title} "
+                    f"(👍 {g['positive_votes']} / 👎 {g['negative_votes']}, "
+                    f"score: {g['score']:.2f})\n"
+                )
+            prefs_message += "\n"
+        
+        # Общая статистика
+        prefs_message += (
+            f"<b>Всего:</b> {summary['total_performers']} перформеров, "
+            f"{summary['total_galleries']} галерей"
+        )
+        
+        if not summary['top_performers'] and not summary['worst_performers'] and \
+           not summary['top_galleries'] and not summary['worst_galleries']:
+            prefs_message += "\n\n💡 <i>Пока нет данных. Начните голосовать за фото!</i>"
+        
+        await update.message.reply_text(prefs_message, parse_mode='HTML')
+    
     async def send_scheduled_photo(self, chat_id: int):
         """
         Отправка фото по расписанию.
@@ -288,6 +410,113 @@ class TelegramHandler:
         """
         logger.info(f"Отправка запланированного фото в chat_id={chat_id}")
         await self._send_random_photo(chat_id, context=None)
+    
+    async def handle_vote_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Обработчик callback для голосования.
+        
+        Args:
+            update: Обновление от Telegram
+            context: Контекст бота
+        """
+        query = update.callback_query
+        user_id = update.effective_user.id
+        
+        # Проверка авторизации
+        if not self._is_authorized(user_id):
+            await query.answer("❌ У вас нет доступа к этому боту.")
+            return
+        
+        # Проверяем наличие voting_manager
+        if not self.voting_manager:
+            await query.answer("⚠️ Система голосования недоступна")
+            return
+        
+        # Подтверждаем получение callback
+        await query.answer()
+        
+        try:
+            # Парсим callback data
+            callback_data = query.data
+            if not callback_data.startswith("vote_"):
+                return
+            
+            parts = callback_data.split("_")
+            if len(parts) != 3:
+                logger.error(f"Неверный формат callback_data: {callback_data}")
+                return
+            
+            vote_type = parts[1]  # "up" или "down"
+            image_id = parts[2]
+            
+            vote = 1 if vote_type == "up" else -1
+            
+            # Получаем изображение из кэша
+            image = self._last_sent_images.get(user_id)
+            
+            if not image or image.id != image_id:
+                # Если изображения нет в кэше, пытаемся получить информацию из базы
+                logger.warning(f"Изображение {image_id} не найдено в кэше для user {user_id}")
+                await query.edit_message_reply_markup(reply_markup=None)
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="⚠️ Не удалось обработать голос. Попробуйте запросить новое фото."
+                )
+                return
+            
+            # Обрабатываем голос
+            logger.info(f"Обработка голоса: user={user_id}, image={image_id}, vote={vote}")
+            result = await self.voting_manager.process_vote(image, vote)
+            
+            # Формируем сообщение об обновлениях
+            vote_emoji = "👍" if vote > 0 else "👎"
+            response_parts = [f"{vote_emoji} <b>Ваш голос учтен!</b>"]
+            
+            if result['image_rating_updated']:
+                rating = 5 if vote > 0 else 1
+                response_parts.append(f"✅ Рейтинг фото обновлен: {rating}/5")
+            
+            if result['performers_updated']:
+                performers_str = ", ".join(result['performers_updated'][:3])
+                response_parts.append(f"👤 Перформеры обновлены: {performers_str}")
+            
+            if result['gallery_updated']:
+                response_parts.append(f"📁 Галерея обновлена: {result['gallery_updated']}")
+            
+            if result['gallery_rating_updated']:
+                response_parts.append(f"⭐ Рейтинг галереи установлен в Stash!")
+            
+            if result['error']:
+                response_parts.append(f"⚠️ Ошибка: {result['error']}")
+            
+            # Обновляем кнопки (отключаем их)
+            voted_keyboard = [
+                [
+                    InlineKeyboardButton(
+                        f"{'✓ ' if vote > 0 else ''}👍", 
+                        callback_data=f"voted_{image_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"{'✓ ' if vote < 0 else ''}👎", 
+                        callback_data=f"voted_{image_id}"
+                    )
+                ]
+            ]
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(voted_keyboard))
+            
+            # Отправляем сообщение с результатом
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="\n".join(response_parts),
+                parse_mode='HTML'
+            )
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке callback голосования: {e}", exc_info=True)
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="❌ Произошла ошибка при обработке голоса."
+            )
     
     def setup_handlers(self, application: Application):
         """
@@ -303,6 +532,10 @@ class TelegramHandler:
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("random", self.random_command))
         application.add_handler(CommandHandler("stats", self.stats_command))
+        application.add_handler(CommandHandler("preferences", self.preferences_command))
+        
+        # Добавление обработчика callback для голосования
+        application.add_handler(CallbackQueryHandler(self.handle_vote_callback, pattern=r'^vote_'))
         
         logger.info("Обработчики команд настроены")
     
@@ -313,6 +546,7 @@ class TelegramHandler:
         commands = [
             BotCommand("random", "Случайное фото"),
             BotCommand("stats", "Статистика"),
+            BotCommand("preferences", "Предпочтения"),
             BotCommand("help", "Справка")
         ]
         
