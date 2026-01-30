@@ -20,7 +20,11 @@ class StashImage:
         self.id = data['id']
         self.title = data.get('title', 'Без названия')
         self.rating = data.get('rating100', 0)
-        self.image_url = data.get('paths', {}).get('image', '')
+        
+        # Используем preview для быстрой загрузки, fallback на оригинал
+        paths = data.get('paths', {})
+        self.image_url = paths.get('preview') or paths.get('image', '')
+        
         self.tags = [tag['name'] for tag in data.get('tags', [])]
     
     def __repr__(self):
@@ -128,7 +132,7 @@ class StashClient:
         Returns:
             Optional[StashImage]: Случайное изображение или None
         """
-        # Упрощенный запрос без image_filter для совместимости со старыми версиями StashApp
+        # Запрос с preview для оптимизации скорости загрузки
         query = """
         query FindRandomImage {
           findImages(
@@ -139,6 +143,7 @@ class StashClient:
               title
               rating100
               paths {
+                preview
                 image
               }
               tags {
