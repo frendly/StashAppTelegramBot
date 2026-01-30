@@ -148,7 +148,7 @@ class Bot:
             await self.application.initialize()
             await self.application.start()
             await self.application.updater.start_polling(
-                allowed_updates=["message"],
+                allowed_updates=["message", "callback_query"],
                 drop_pending_updates=True
             )
             
