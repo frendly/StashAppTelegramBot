@@ -601,7 +601,7 @@ class TelegramHandler:
             if result['error']:
                 response_parts.append(f"⚠️ Ошибка: {result['error']}")
             
-            # Обновляем кнопки (отключаем их)
+            # Обновляем кнопки (отмечаем сделанный выбор)
             voted_keyboard = [
                 [
                     InlineKeyboardButton(
@@ -616,12 +616,49 @@ class TelegramHandler:
             ]
             await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(voted_keyboard))
             
-            # Отправляем сообщение с результатом
+            # Отправляем сообщение с результатом голосования
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="\n".join(response_parts),
                 parse_mode='HTML'
             )
+            
+            # Инвалидация кэша фильтрации после голосования
+            self.voting_manager.invalidate_filtering_cache()
+            
+            # Rate limiting - не чаще 1 раза в 10 секунд
+            chat_id = query.message.chat_id
+            now = time.time()
+            if user_id in self._last_command_time:
+                time_passed = now - self._last_command_time[user_id]
+                if time_passed < 10:
+                    wait_time = int(10 - time_passed)
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⏳ Подождите {wait_time} секунд перед следующим запросом."
+                    )
+                    logger.warning(f"Rate limit для user_id={user_id}, осталось {wait_time}с")
+                    return
+            
+            self._last_command_time[user_id] = now
+            
+            # Отправка сообщения о загрузке
+            loading_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text="🔄 Загружаю следующее фото..."
+            )
+            
+            # Отправка следующего случайного фото
+            success = await self._send_random_photo(chat_id, user_id, context)
+            
+            # Удаление сообщения о загрузке
+            try:
+                await loading_msg.delete()
+            except Exception as e:
+                logger.warning(f"Не удалось удалить loading сообщение: {e}")
+            
+            if not success:
+                logger.error(f"Не удалось отправить фото после голосования user_id={user_id}")
             
         except Exception as e:
             logger.error(f"Ошибка при обработке callback голосования: {e}", exc_info=True)
@@ -629,6 +666,18 @@ class TelegramHandler:
                 chat_id=query.message.chat_id,
                 text="❌ Произошла ошибка при обработке голоса."
             )
+    
+    async def handle_voted_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Обработчик callback для уже проголосованных кнопок.
+        Просто подтверждаем получение, чтобы callback не висел.
+        
+        Args:
+            update: Обновление от Telegram
+            context: Контекст бота
+        """
+        query = update.callback_query
+        await query.answer("Вы уже проголосовали за это фото", show_alert=False)
     
     def setup_handlers(self, application: Application):
         """
@@ -646,8 +695,9 @@ class TelegramHandler:
         application.add_handler(CommandHandler("stats", self.stats_command))
         application.add_handler(CommandHandler("preferences", self.preferences_command))
         
-        # Добавление обработчика callback для голосования
+        # Добавление обработчиков callback для голосования
         application.add_handler(CallbackQueryHandler(self.handle_vote_callback, pattern=r'^vote_'))
+        application.add_handler(CallbackQueryHandler(self.handle_voted_callback, pattern=r'^voted_'))
         
         logger.info("Обработчики команд настроены")
     
