@@ -48,6 +48,7 @@ class TelegramHandler:
         self.application: Optional[Application] = None
         self._last_command_time: Dict[int, float] = {}  # Rate limiting
         self._last_sent_images: Dict[int, StashImage] = {}  # Кэш последних отправленных изображений
+        self._last_sent_image_id: Dict[int, str] = {}  # Кэш ID последнего отправленного изображения для каждого пользователя
         self._prefetched_image: Optional[Dict[str, Any]] = None  # Предзагруженное изображение {image, image_data}
         self._prefetch_lock: asyncio.Lock = asyncio.Lock()  # Lock для синхронизации предзагрузки
     
@@ -256,6 +257,10 @@ class TelegramHandler:
                 title=image.title
             )
             timer.checkpoint("Save to database")
+            
+            # Обновление кэша последнего отправленного изображения
+            if user_id:
+                self._last_sent_image_id[user_id] = image.id
             
             # Запуск фоновой предзагрузки следующего изображения
             # Только если была команда от пользователя (не планировщик)
@@ -979,16 +984,25 @@ class TelegramHandler:
             
             # Получаем изображение из кэша
             image = self._last_sent_images.get(user_id)
+            image_from_api = False
             
             if not image or image.id != image_id:
-                # Если изображения нет в кэше, пытаемся получить информацию из базы
-                logger.warning(f"Изображение {image_id} не найдено в кэше для user {user_id}")
-                await query.edit_message_reply_markup(reply_markup=None)
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="⚠️ Не удалось обработать голос. Попробуйте запросить новое фото."
-                )
-                return
+                # Если изображения нет в кэше, пытаемся получить из StashApp API
+                logger.warning(f"Изображение {image_id} не найдено в кэше для user {user_id}, пытаемся получить из API")
+                image = await self.stash_client.get_image_by_id(image_id)
+                
+                if not image:
+                    # Если и из API не удалось получить, возвращаем ошибку
+                    logger.error(f"Не удалось получить изображение {image_id} из API для user {user_id}")
+                    await query.edit_message_reply_markup(reply_markup=None)
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text="⚠️ Не удалось обработать голос. Попробуйте запросить новое фото."
+                    )
+                    return
+                
+                image_from_api = True
+                logger.info(f"Изображение {image_id} получено из API для user {user_id}")
             
             # Обрабатываем голос
             logger.info(f"Обработка голоса: user={user_id}, image={image_id}, vote={vote}")
@@ -1084,39 +1098,78 @@ class TelegramHandler:
             # Инвалидация кэша фильтрации после голосования
             self.voting_manager.invalidate_filtering_cache()
             
-            # Rate limiting - не чаще 1 раза в 2 секунды
-            chat_id = query.message.chat_id
-            now = time.time()
-            if user_id in self._last_command_time:
-                time_passed = now - self._last_command_time[user_id]
-                if time_passed < 2:
-                    wait_time = int(2 - time_passed)
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"⏳ Подождите {wait_time} секунд перед следующим запросом."
-                    )
-                    logger.warning(f"Rate limit для user_id={user_id}, осталось {wait_time}с")
-                    return
+            # Определяем, нужно ли отправлять новое изображение
+            should_send_new_image = False
             
-            self._last_command_time[user_id] = now
+            # Проверяем, является ли изображение последним (сначала кэш, потом БД)
+            last_image_id = self._last_sent_image_id.get(user_id)
             
-            # Отправка сообщения о загрузке
-            loading_msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text="🔄 Загружаю следующее фото..."
-            )
+            if last_image_id and image_id == last_image_id:
+                # Изображение совпадает с последним в кэше - отправляем новое
+                should_send_new_image = True
+                logger.info(f"Изображение {image_id} является последним (из кэша), отправляем новое изображение")
+            elif last_image_id:
+                # Изображение не совпадает с последним в кэше - не отправляем
+                should_send_new_image = False
+                logger.info(f"Изображение {image_id} не является последним (последнее: {last_image_id}), не отправляем новое изображение")
+            else:
+                # Кэш пуст, проверяем БД
+                last_photo = self.database.get_last_sent_photo_for_user(user_id)
+                if last_photo:
+                    last_photo_image_id = last_photo[0]
+                    # Обновляем кэш для будущих проверок
+                    self._last_sent_image_id[user_id] = last_photo_image_id
+                    
+                    if image_id == last_photo_image_id:
+                        # Изображение совпадает с последним в БД - отправляем новое
+                        should_send_new_image = True
+                        logger.info(f"Изображение {image_id} является последним (из БД), отправляем новое изображение")
+                    else:
+                        # Изображение не совпадает с последним в БД - не отправляем
+                        should_send_new_image = False
+                        logger.info(f"Изображение {image_id} не является последним (последнее: {last_photo_image_id}), не отправляем новое изображение")
+                else:
+                    # В БД нет записей для пользователя - это может быть первое изображение
+                    # Если изображение получено из API (fallback), значит его точно нет в БД - отправляем новое
+                    # Если из кэша, но нет в БД - странная ситуация, но тоже отправляем новое для безопасности
+                    should_send_new_image = True
+                    logger.info(f"В БД нет записей для user {user_id}, отправляем новое изображение")
             
-            # Отправка следующего случайного фото
-            success = await self._send_random_photo(chat_id, user_id, context)
-            
-            # Удаление сообщения о загрузке
-            try:
-                await loading_msg.delete()
-            except Exception as e:
-                logger.warning(f"Не удалось удалить loading сообщение: {e}")
-            
-            if not success:
-                logger.error(f"Не удалось отправить фото после голосования user_id={user_id}")
+            # Отправляем новое изображение только если нужно
+            if should_send_new_image:
+                # Rate limiting - не чаще 1 раза в 2 секунды
+                chat_id = query.message.chat_id
+                now = time.time()
+                if user_id in self._last_command_time:
+                    time_passed = now - self._last_command_time[user_id]
+                    if time_passed < 2:
+                        wait_time = int(2 - time_passed)
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"⏳ Подождите {wait_time} секунд перед следующим запросом."
+                        )
+                        logger.warning(f"Rate limit для user_id={user_id}, осталось {wait_time}с")
+                        return
+                
+                self._last_command_time[user_id] = now
+                
+                # Отправка сообщения о загрузке
+                loading_msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="🔄 Загружаю следующее фото..."
+                )
+                
+                # Отправка следующего случайного фото
+                success = await self._send_random_photo(chat_id, user_id, context)
+                
+                # Удаление сообщения о загрузке
+                try:
+                    await loading_msg.delete()
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить loading сообщение: {e}")
+                
+                if not success:
+                    logger.error(f"Не удалось отправить фото после голосования user_id={user_id}")
             
         except Exception as e:
             logger.error(f"Ошибка при обработке callback голосования: {e}", exc_info=True)

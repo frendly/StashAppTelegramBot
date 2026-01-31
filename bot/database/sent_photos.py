@@ -149,3 +149,25 @@ class SentPhotosRepository:
             """)
             result = cursor.fetchone()
             return result if result else None
+    
+    def get_last_sent_photo_for_user(self, user_id: int) -> Optional[tuple]:
+        """
+        Получение информации о последнем отправленном фото для конкретного пользователя.
+        
+        Args:
+            user_id: Telegram ID пользователя
+            
+        Returns:
+            Optional[tuple]: (image_id, sent_at, title) или None
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT image_id, sent_at, title 
+                FROM sent_photos 
+                WHERE user_id = ?
+                ORDER BY sent_at DESC 
+                LIMIT 1
+            """, (user_id,))
+            result = cursor.fetchone()
+            return result if result else None

@@ -36,6 +36,7 @@ class Database(DatabaseBase):
         self.get_user_sent_count = self.sent_photos_repo.get_user_sent_count
         self.cleanup_old_records = self.sent_photos_repo.cleanup_old_records
         self.get_last_sent_photo = self.sent_photos_repo.get_last_sent_photo
+        self.get_last_sent_photo_for_user = self.sent_photos_repo.get_last_sent_photo_for_user
         
         # Votes methods
         self.add_vote = self.votes_repo.add_vote

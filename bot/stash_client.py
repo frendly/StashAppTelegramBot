@@ -1244,3 +1244,64 @@ class StashClient:
         duration = time.perf_counter() - start_time
         logger.error(f"⏱️  get_random_image_weighted failed after {duration:.3f}s ({attempts_made} attempts)")
         return None
+    
+    async def get_image_by_id(self, image_id: str) -> Optional[StashImage]:
+        """
+        Получение изображения по ID из StashApp.
+        
+        Args:
+            image_id: ID изображения
+            
+        Returns:
+            Optional[StashImage]: Изображение или None при ошибке
+        """
+        start_time = time.perf_counter()
+        
+        query = """
+        query GetImageById($id: ID!) {
+          findImage(id: $id) {
+            id
+            title
+            rating100
+            paths {
+              thumbnail
+              preview
+              image
+            }
+            galleries {
+              id
+              title
+            }
+            performers {
+              id
+              name
+            }
+          }
+        }
+        """
+        
+        variables = {
+            "id": image_id
+        }
+        
+        try:
+            query_start = time.perf_counter()
+            data = await self._execute_query(query, variables)
+            query_duration = time.perf_counter() - query_start
+            
+            image_data = data.get('findImage')
+            
+            if not image_data:
+                logger.warning(f"Изображение {image_id} не найдено в StashApp")
+                return None
+            
+            image = StashImage(image_data)
+            
+            total_duration = time.perf_counter() - start_time
+            logger.info(f"⏱️  get_image_by_id: {total_duration:.3f}s (query: {query_duration:.3f}s, image: {image_id})")
+            return image
+        
+        except Exception as e:
+            duration = time.perf_counter() - start_time
+            logger.error(f"⏱️  get_image_by_id failed after {duration:.3f}s (image: {image_id}): {e}")
+            return None
