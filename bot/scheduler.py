@@ -199,7 +199,7 @@ class Scheduler:
         """
         Фоновая задача предзагрузки изображений в служебный канал.
         
-        Предзагружает 5 изображений high quality в служебный канал для получения file_id_high_quality.
+        Предзагружает 2 изображения high quality в служебный канал для получения file_id_high_quality.
         Это ускоряет отправку изображений пользователям.
         """
         if not self.database or not self.stash_client or not self.telegram_handler:
@@ -218,9 +218,9 @@ class Scheduler:
                 self.config.history.avoid_recent_days
             )
             
-            # Получение 5 случайных изображений с учетом предпочтений
+            # Получение 2 случайных изображений с учетом предпочтений
             images_to_preload = []
-            for _ in range(5):
+            for _ in range(2):
                 try:
                     # Используем метод из telegram_handler для получения случайного изображения
                     # Это обеспечивает единую логику выбора с учетом весов галерей и фильтров
