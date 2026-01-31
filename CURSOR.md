@@ -47,7 +47,8 @@ User ──→ Telegram Bot ──→ Handler ←── Scheduler (cron)
 **Command /random:**
 ```
 User → random_command() → Check auth → Get recent IDs (DB) 
-→ Get filtering lists (Voting) → get_random_image_weighted() (StashClient)
+→ Get gallery weights (Voting) → Select gallery by weight (StashClient)
+→ Get random image from selected gallery → Ensure gallery exists in DB (weight=1.0)
 → Download thumbnail → Send to Telegram with 👍👎 buttons
 → Save to DB → Prefetch next image (background)
 ```
@@ -81,7 +82,16 @@ score = (positive_votes - negative_votes) / total_votes
 2. Save vote to DB with context (gallery_id, performer_ids)
 3. Update performer preferences
 4. Update gallery preferences
-5. Auto-set gallery rating after 5+ votes (% positive → 1-5 stars)
+5. Update gallery weight: +20% for 👍, -20% for 👎 (range: 0.1-10.0)
+6. Auto-set gallery rating after 5+ votes (% positive → 1-5 stars)
+
+### Gallery Weight System
+
+- **Weight calculation:** Starts at 1.0, multiplies by 1.2 for 👍, 0.8 for 👎
+- **Range:** 0.1 (minimum) to 10.0 (maximum)
+- **Weighted selection:** Galleries with higher weights are more likely to be chosen
+- **Auto-creation:** Galleries are automatically added to DB with weight 1.0 when first shown
+- **Caching:** Weights cached for 60 seconds, invalidated after vote
 
 ### Caching
 - Filter lists cached for 60 seconds
@@ -150,12 +160,15 @@ performer_preferences(performer_id, performer_name, positive_votes,
 
 -- Gallery preferences
 gallery_preferences(gallery_id, gallery_title, positive_votes,
-                   negative_votes, total_votes, score, rating_set, updated_at)
+                   negative_votes, total_votes, score, rating_set, updated_at,
+                   weight, excluded, excluded_at, threshold_notification_shown,
+                   total_images, images_count_updated_at)
 ```
 
 ### Indexes
 - `idx_image_id` on `sent_photos(image_id)`
 - `idx_sent_at` on `sent_photos(sent_at)`
+- `idx_gallery_weight` on `gallery_preferences(weight)`
 
 **Details:** [`bot/database.py`](bot/database.py)
 
