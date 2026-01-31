@@ -54,6 +54,8 @@ class Database(DatabaseBase):
         self.get_gallery_preference = self.preferences_repo.get_gallery_preference
         self.get_blacklisted_galleries = self.preferences_repo.get_blacklisted_galleries
         self.get_whitelisted_galleries = self.preferences_repo.get_whitelisted_galleries
+        self.is_threshold_notification_shown = self.preferences_repo.is_threshold_notification_shown
+        self.mark_threshold_notification_shown = self.preferences_repo.mark_threshold_notification_shown
         
         # Weights methods
         self.calculate_initial_weight = self.weights_repo.calculate_initial_weight

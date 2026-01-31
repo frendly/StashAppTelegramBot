@@ -322,3 +322,45 @@ class PreferencesRepository:
             duration = time.perf_counter() - start_time
             logger.debug(f"⏱️  DB get_whitelisted_galleries: {duration:.3f}s ({len(ids)} items)")
             return ids
+    
+    def is_threshold_notification_shown(self, gallery_id: str) -> bool:
+        """
+        Проверка, показывалось ли уведомление о достижении порога для галереи.
+        
+        Args:
+            gallery_id: ID галереи
+            
+        Returns:
+            bool: True если уведомление уже показывалось
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT threshold_notification_shown
+                FROM gallery_preferences
+                WHERE gallery_id = ?
+            """, (gallery_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return False
+            
+            return bool(result[0]) if result[0] is not None else False
+    
+    def mark_threshold_notification_shown(self, gallery_id: str):
+        """
+        Отметить, что уведомление о достижении порога было показано для галереи.
+        
+        Args:
+            gallery_id: ID галереи
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE gallery_preferences
+                SET threshold_notification_shown = TRUE
+                WHERE gallery_id = ?
+            """, (gallery_id,))
+            
+            conn.commit()
+            logger.debug(f"Уведомление о пороге для галереи {gallery_id} отмечено как показанное")

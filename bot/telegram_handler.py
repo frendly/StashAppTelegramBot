@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
@@ -162,8 +162,24 @@ class TelegramHandler:
                         )
                     return False
             
-            # Формирование подписи
-            caption = self._format_caption(image)
+            # Проверка достижения порога и формирование подписи
+            should_show_threshold = False
+            if image.gallery_id:
+                should_show_threshold = self._should_show_threshold_notification(image.gallery_id)
+            
+            if should_show_threshold:
+                # Используем формат с порогом
+                gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
+                if gallery_stats:
+                    caption = self._format_threshold_caption(image, gallery_stats)
+                    # Отмечаем уведомление как показанное
+                    self.database.mark_threshold_notification_shown(image.gallery_id)
+                else:
+                    # Fallback на обычный формат, если статистики нет
+                    caption = self._format_caption(image)
+            else:
+                # Обычный формат
+                caption = self._format_caption(image)
             
             # Создание кнопок для голосования
             keyboard = [
@@ -172,6 +188,20 @@ class TelegramHandler:
                     InlineKeyboardButton("👎", callback_data=f"vote_down_{image.id}")
                 ]
             ]
+            
+            # Добавление кнопки исключения, если порог достигнут
+            if should_show_threshold and image.gallery_id and image.gallery_title:
+                exclude_button_text = f"🚫 Исключить \"{image.gallery_title}\""
+                # Ограничиваем длину текста кнопки (Telegram имеет лимит)
+                if len(exclude_button_text) > 64:
+                    exclude_button_text = f"🚫 Исключить \"{image.gallery_title[:50]}...\""
+                keyboard.append([
+                    InlineKeyboardButton(
+                        exclude_button_text,
+                        callback_data=f"exclude_gallery_{image.gallery_id}"
+                    )
+                ])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             # Отправка фото
@@ -302,6 +332,70 @@ class TelegramHandler:
             max_retries=5
         )
     
+    def _should_show_threshold_notification(self, gallery_id: str) -> bool:
+        """
+        Проверка, нужно ли показать уведомление о достижении порога исключения.
+        
+        Args:
+            gallery_id: ID галереи
+            
+        Returns:
+            bool: True если порог достигнут И уведомление еще не показывалось
+        """
+        if not self.voting_manager or not gallery_id:
+            return False
+        
+        try:
+            # Проверяем, достигнут ли порог
+            threshold_reached, _ = self.voting_manager.check_exclusion_threshold(gallery_id)
+            
+            if not threshold_reached:
+                return False
+            
+            # Проверяем, показывалось ли уже уведомление
+            notification_shown = self.database.is_threshold_notification_shown(gallery_id)
+            
+            # Показываем уведомление только если порог достигнут И уведомление еще не показывалось
+            return not notification_shown
+            
+        except Exception as e:
+            logger.warning(f"Ошибка при проверке показа уведомления о пороге для галереи {gallery_id}: {e}")
+            return False
+    
+    def _calculate_display_rating(self, positive_votes: int, negative_votes: int) -> Tuple[str, float]:
+        """
+        Расчет рейтинга для отображения в формате "⭐⭐⭐☆☆ (3.2/5.0)".
+        
+        Формула: (positive_votes * 5 + negative_votes * 1) / total_votes
+        
+        Args:
+            positive_votes: Количество положительных голосов
+            negative_votes: Количество отрицательных голосов
+            
+        Returns:
+            tuple[str, float]: (stars_string, rating_value)
+            - stars_string: Строка со звездами, например "⭐⭐⭐☆☆"
+            - rating_value: Числовое значение рейтинга от 1.0 до 5.0
+        """
+        total_votes = positive_votes + negative_votes
+        
+        if total_votes == 0:
+            # Если нет голосов, возвращаем нейтральный рейтинг
+            return ("☆☆☆☆☆", 0.0)
+        
+        # Расчет рейтинга: (positive_votes * 5 + negative_votes * 1) / total_votes
+        rating_value = (positive_votes * 5.0 + negative_votes * 1.0) / total_votes
+        rating_value = max(1.0, min(5.0, rating_value))  # Ограничиваем диапазон 1.0-5.0
+        
+        # Конвертация в звезды (округление до ближайшего целого)
+        stars_count = round(rating_value)
+        stars_count = max(1, min(5, stars_count))  # Ограничиваем диапазон 1-5
+        
+        # Формирование строки со звездами
+        stars_string = "⭐" * stars_count + "☆" * (5 - stars_count)
+        
+        return (stars_string, round(rating_value, 1))
+    
     def _format_progress_bar(self, negative_votes: int, total_images: int, negative_percentage: Optional[float] = None) -> str:
         """
         Форматирование прогресс-бара для отображения процента минусов.
@@ -344,7 +438,12 @@ class TelegramHandler:
     
     def _format_caption(self, image: StashImage) -> str:
         """
-        Форматирование подписи к изображению.
+        Форматирование подписи к изображению согласно MVP.
+        
+        Формат обычного сообщения:
+        📊 Галерея: "Название_галереи"
+        Вес: 2.4 | ⭐⭐⭐☆☆ (3.2/5.0)
+        Прогресс: [██████░░░░] 60% (12/20)
         
         Args:
             image: Объект изображения
@@ -352,35 +451,127 @@ class TelegramHandler:
         Returns:
             str: Отформатированная подпись
         """
+        # Если нет галереи, используем упрощенный формат
+        if not image.gallery_id or not image.gallery_title:
+            caption_parts = []
+            if image.title and image.title != 'Без названия':
+                caption_parts.append(f"<b>{image.title}</b>")
+            return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
+        
+        try:
+            # Получаем статистику галереи
+            gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
+            
+            # Если статистики нет, используем упрощенный формат
+            if not gallery_stats or gallery_stats.get('total_images', 0) == 0:
+                caption_parts = []
+                if image.title and image.title != 'Без названия':
+                    caption_parts.append(f"<b>{image.title}</b>")
+                caption_parts.append(f"📊 Галерея: \"{image.gallery_title}\"")
+                return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
+            
+            # Формируем новый формат согласно MVP
+            caption_parts = []
+            
+            # Галерея
+            caption_parts.append(f"📊 Галерея: \"{image.gallery_title}\"")
+            
+            # Вес и рейтинг
+            try:
+                weight = self.database.get_gallery_weight(image.gallery_id)
+                positive_votes = gallery_stats.get('positive_votes', 0)
+                negative_votes = gallery_stats.get('negative_votes', 0)
+                stars_string, rating_value = self._calculate_display_rating(positive_votes, negative_votes)
+                
+                # Показываем вес и рейтинг только если есть хотя бы один голос
+                if positive_votes + negative_votes > 0:
+                    caption_parts.append(f"Вес: {weight:.1f} | {stars_string} ({rating_value}/5.0)")
+                else:
+                    # Если нет голосов, показываем только вес
+                    caption_parts.append(f"Вес: {weight:.1f}")
+            except Exception as e:
+                logger.warning(f"Ошибка при получении веса/рейтинга для галереи {image.gallery_id}: {e}")
+                # Если не удалось получить вес/рейтинг, пропускаем эту строку
+            
+            # Прогресс-бар
+            progress_bar = self._format_progress_bar(
+                negative_votes=gallery_stats.get('negative_votes', 0),
+                total_images=gallery_stats.get('total_images', 0),
+                negative_percentage=gallery_stats.get('negative_percentage')
+            )
+            if progress_bar:
+                caption_parts.append(f"Прогресс: {progress_bar}")
+            
+            return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
+            
+        except Exception as e:
+            logger.warning(f"Ошибка при форматировании подписи для галереи {image.gallery_id}: {e}")
+            # Fallback на упрощенный формат
+            caption_parts = []
+            if image.title and image.title != 'Без названия':
+                caption_parts.append(f"<b>{image.title}</b>")
+            if image.gallery_title:
+                caption_parts.append(f"📊 Галерея: \"{image.gallery_title}\"")
+            return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
+    
+    def _format_threshold_caption(self, image: StashImage, gallery_stats: Dict[str, Any]) -> str:
+        """
+        Форматирование подписи при достижении порога 33.3%.
+        
+        Формат согласно MVP:
+        Галерея: "Название_галереи"
+        Прогресс: [██████░░░░] 60% (12/20)
+        
+        • Всего изображений: 20
+        • Получили "+": 5
+        • Получили "-": 12 (60%)
+        • Без оценки: 3
+        
+        Args:
+            image: Объект изображения
+            gallery_stats: Статистика галереи
+            
+        Returns:
+            str: Отформатированная подпись
+        """
         caption_parts = []
         
-        if image.title and image.title != 'Без названия':
-            caption_parts.append(f"<b>{image.title}</b>")
+        # Галерея
+        if image.gallery_title:
+            caption_parts.append(f"Галерея: \"{image.gallery_title}\"")
         
-        if image.rating is not None and image.rating > 0:
-            stars = "⭐" * (image.rating // 20)  # Конвертация rating100 в звезды (0-5)
-            caption_parts.append(f"Рейтинг: {stars} ({image.rating}/100)")
+        # Прогресс-бар
+        total_images = gallery_stats.get('total_images', 0)
+        negative_votes = gallery_stats.get('negative_votes', 0)
+        negative_percentage = gallery_stats.get('negative_percentage', 0.0)
         
-        if image.tags:
-            tags_str = ", ".join([f"#{tag.replace(' ', '_')}" for tag in image.tags[:5]])
-            caption_parts.append(f"Теги: {tags_str}")
+        if total_images > 0:
+            progress_bar = self._format_progress_bar(
+                negative_votes=negative_votes,
+                total_images=total_images,
+                negative_percentage=negative_percentage
+            )
+            if progress_bar:
+                caption_parts.append(f"Прогресс: {progress_bar}")
         
-        # Добавление прогресс-бара, если есть статистика галереи
-        if image.gallery_id:
-            try:
-                gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
-                if gallery_stats and gallery_stats.get('total_images', 0) > 0:
-                    progress_bar = self._format_progress_bar(
-                        negative_votes=gallery_stats.get('negative_votes', 0),
-                        total_images=gallery_stats.get('total_images', 0),
-                        negative_percentage=gallery_stats.get('negative_percentage')  # Используем готовое значение из БД
-                    )
-                    if progress_bar:  # Проверка все еще нужна на случай edge cases
-                        caption_parts.append(f"Прогресс: {progress_bar}")
-            except Exception as e:
-                logger.warning(f"Ошибка при получении статистики галереи {image.gallery_id}: {e}")
+        # Пустая строка перед детальной статистикой
+        caption_parts.append("")
         
-        return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
+        # Детальная статистика
+        positive_votes = gallery_stats.get('positive_votes', 0)
+        unrated_count = max(0, total_images - positive_votes - negative_votes)
+        
+        # Защита от некорректных данных
+        if total_images == 0:
+            caption_parts.append("• Всего изображений: 0")
+            return "\n".join(caption_parts)
+        
+        caption_parts.append(f"• Всего изображений: {total_images}")
+        caption_parts.append(f"• Получили \"+\": {positive_votes}")
+        caption_parts.append(f"• Получили \"-\": {negative_votes} ({negative_percentage:.0f}%)")
+        caption_parts.append(f"• Без оценки: {unrated_count}")
+        
+        return "\n".join(caption_parts)
     
     async def _prefetch_next_image(self):
         """
@@ -783,6 +974,11 @@ class TelegramHandler:
             if result['error']:
                 response_parts.append(f"⚠️ Ошибка: {result['error']}")
             
+            # Проверяем достижение порога после голосования
+            should_show_threshold = False
+            if image.gallery_id:
+                should_show_threshold = self._should_show_threshold_notification(image.gallery_id)
+            
             # Обновляем кнопки (отмечаем сделанный выбор)
             voted_keyboard = [
                 [
@@ -796,7 +992,46 @@ class TelegramHandler:
                     )
                 ]
             ]
-            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(voted_keyboard))
+            
+            # Если порог достигнут, добавляем кнопку исключения и обновляем подпись
+            if should_show_threshold and image.gallery_id and image.gallery_title:
+                # Получаем обновленную статистику
+                gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
+                if gallery_stats:
+                    # Формируем новую подпись с порогом
+                    new_caption = self._format_threshold_caption(image, gallery_stats)
+                    
+                    # Добавляем кнопку исключения
+                    exclude_button_text = f"🚫 Исключить \"{image.gallery_title}\""
+                    if len(exclude_button_text) > 64:
+                        exclude_button_text = f"🚫 Исключить \"{image.gallery_title[:50]}...\""
+                    voted_keyboard.append([
+                        InlineKeyboardButton(
+                            exclude_button_text,
+                            callback_data=f"exclude_gallery_{image.gallery_id}"
+                        )
+                    ])
+                    
+                    # Обновляем подпись и кнопки в сообщении
+                    try:
+                        await query.edit_message_caption(
+                            caption=new_caption,
+                            parse_mode='HTML',
+                            reply_markup=InlineKeyboardMarkup(voted_keyboard)
+                        )
+                    except Exception as e:
+                        logger.warning(f"Не удалось обновить подпись сообщения: {e}")
+                        # Если не удалось обновить подпись, просто обновляем кнопки
+                        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(voted_keyboard))
+                    
+                    # Отмечаем уведомление как показанное
+                    self.database.mark_threshold_notification_shown(image.gallery_id)
+                else:
+                    # Если статистики нет, просто обновляем кнопки
+                    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(voted_keyboard))
+            else:
+                # Порог не достигнут, просто обновляем кнопки
+                await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(voted_keyboard))
             
             # Отправляем сообщение с результатом голосования
             await context.bot.send_message(

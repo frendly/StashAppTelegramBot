@@ -2,7 +2,7 @@
 
 import logging
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from bot.database import Database
 from bot.stash_client import StashClient, StashImage
@@ -267,3 +267,53 @@ class VotingManager:
         logger.debug("⏱️  Invalidating gallery weights cache")
         self._weights_cache = None
         self._weights_cache_time = 0
+    
+    def check_exclusion_threshold(self, gallery_id: str) -> Tuple[bool, float]:
+        """
+        Проверка достижения порога исключения для галереи.
+        
+        Пороги:
+        - Галерея с 1 изображением: 1 минус → порог достигнут
+        - Галерея с 2 изображениями: 1 минус → порог достигнут
+        - Галерея с 3+ изображениями: ≥33.3% минусов → порог достигнут
+        
+        Args:
+            gallery_id: ID галереи
+            
+        Returns:
+            Tuple[bool, float]: (threshold_reached, negative_percentage)
+            - threshold_reached: True если порог достигнут
+            - negative_percentage: Процент минусов (0.0-100.0)
+        """
+        try:
+            gallery_stats = self.database.get_gallery_statistics(gallery_id)
+            
+            if not gallery_stats:
+                return (False, 0.0)
+            
+            total_images = gallery_stats.get('total_images', 0)
+            negative_votes = gallery_stats.get('negative_votes', 0)
+            negative_percentage = gallery_stats.get('negative_percentage', 0.0)
+            
+            # Если total_images == 0, порог не достигнут
+            if total_images == 0:
+                return (False, 0.0)
+            
+            # Проверка порогов согласно MVP
+            if total_images == 1:
+                # 1 изображение: 1 минус → порог достигнут
+                threshold_reached = negative_votes >= 1
+            elif total_images == 2:
+                # 2 изображения: 1 минус → порог достигнут
+                threshold_reached = negative_votes >= 1
+            else:
+                # 3+ изображения: ≥33.3% минусов → порог достигнут
+                # Используем прямое сравнение для избежания проблем с точностью float
+                # negative_percentage уже округлен до 2 знаков в get_gallery_statistics
+                threshold_reached = negative_percentage >= 33.3
+            
+            return (threshold_reached, negative_percentage)
+            
+        except Exception as e:
+            logger.error(f"Ошибка при проверке порога исключения для галереи {gallery_id}: {e}", exc_info=True)
+            return (False, 0.0)
