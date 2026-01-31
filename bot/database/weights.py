@@ -2,6 +2,8 @@
 
 import sqlite3
 import logging
+import time
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -162,3 +164,90 @@ class WeightsRepository:
             row[0]: float(row[1]) if row[1] is not None else 1.0
             for row in results
         }
+    
+    def get_gallery_stats_with_viewed_counts(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Получение статистики по галереям для модификации весов.
+        
+        Returns:
+            Dict: {gallery_id: {weight: float, viewed: int, total: int, last_selected: float}}
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Получаем веса, количество изображений, время последнего выбора и статус исключения
+            cursor.execute("""
+                SELECT 
+                    gp.gallery_id,
+                    gp.weight,
+                    gp.total_images,
+                    gp.last_selected_at,
+                    COUNT(DISTINCT v.image_id) as viewed_count,
+                    gp.excluded
+                FROM gallery_preferences gp
+                LEFT JOIN votes v ON v.gallery_id = gp.gallery_id
+                GROUP BY gp.gallery_id
+            """)
+            
+            results = {}
+            current_time = time.time()
+            
+            for row in cursor.fetchall():
+                gallery_id = row[0]
+                weight = float(row[1]) if row[1] else 1.0
+                total_images = int(row[2]) if row[2] else 0
+                last_selected_at = row[3]
+                viewed_count = int(row[4]) if row[4] else 0
+                excluded = bool(row[5]) if row[5] is not None else False
+                
+                # Пропускаем исключенные галереи
+                if excluded:
+                    continue
+                
+                # Преобразуем timestamp в секунды
+                if last_selected_at:
+                    try:
+                        # Пробуем разные форматы даты
+                        if 'T' in str(last_selected_at):
+                            dt = datetime.fromisoformat(str(last_selected_at).replace('Z', '+00:00'))
+                        else:
+                            dt = datetime.strptime(str(last_selected_at), '%Y-%m-%d %H:%M:%S')
+                        last_selected = dt.timestamp()
+                    except Exception as e:
+                        logger.debug(f"Ошибка парсинга даты {last_selected_at}: {e}")
+                        last_selected = 0
+                else:
+                    last_selected = 0
+                
+                results[gallery_id] = {
+                    'weight': weight,
+                    'viewed': viewed_count,
+                    'total': total_images if total_images > 0 else 1,
+                    'last_selected': last_selected
+                }
+            
+            return results
+    
+    def update_gallery_last_selected(self, gallery_id: str):
+        """
+        Обновление времени последнего выбора галереи.
+        
+        Args:
+            gallery_id: ID галереи
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE gallery_preferences
+                SET last_selected_at = CURRENT_TIMESTAMP
+                WHERE gallery_id = ?
+            """, (gallery_id,))
+            
+            # Если галереи нет в БД, создаем запись (на случай, если она еще не была выбрана)
+            if cursor.rowcount == 0:
+                # Пытаемся создать запись с базовыми значениями
+                # Но нам нужно название галереи, поэтому просто логируем
+                logger.debug(f"Галерея {gallery_id} не найдена в БД для обновления last_selected_at")
+            else:
+                conn.commit()
+                logger.debug(f"Обновлено время последнего выбора для галереи {gallery_id}")

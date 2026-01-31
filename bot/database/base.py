@@ -133,6 +133,10 @@ class DatabaseBase:
                 cursor.execute("ALTER TABLE gallery_preferences ADD COLUMN images_count_updated_at TIMESTAMP")
                 logger.info("Добавлено поле images_count_updated_at в gallery_preferences")
             
+            if 'last_selected_at' not in existing_columns:
+                cursor.execute("ALTER TABLE gallery_preferences ADD COLUMN last_selected_at TIMESTAMP")
+                logger.info("Добавлено поле last_selected_at в gallery_preferences")
+            
             # Миграция существующих записей: установить weight = 1.0 для записей без веса
             cursor.execute("UPDATE gallery_preferences SET weight = 1.0 WHERE weight IS NULL")
             

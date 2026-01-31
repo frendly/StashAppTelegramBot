@@ -11,45 +11,147 @@ from bot.performance import timing_decorator
 logger = logging.getLogger(__name__)
 
 
-def select_gallery_by_weight(weights_dict: Dict[str, float]) -> Optional[str]:
+def select_gallery_by_weight(
+    weights_dict: Dict[str, float],
+    all_galleries: Optional[List[Dict[str, Any]]] = None,
+    gallery_stats: Optional[Dict[str, Dict[str, Any]]] = None,
+    excluded_galleries: Optional[set] = None
+) -> Optional[str]:
     """
-    Взвешенный случайный выбор галереи на основе весов.
+    Взвешенный случайный выбор галереи с учетом всех галерей из StashApp,
+    просмотренности и свежести.
     
     Алгоритм:
-    1. Вычисляет сумму всех весов
-    2. Генерирует случайное число от 0 до суммы
-    3. Проходит по галереям, накапливая веса, пока не превысит случайное число
+    1. Если передан список всех галерей, использует его (включая галереи без записей в БД)
+    2. Для каждой галереи вычисляет модифицированный вес с учетом:
+       - Базового веса из БД (или 1.0 по умолчанию)
+       - Штрафа за просмотренность (чем больше просмотрено, тем меньше вес)
+       - Бонуса за свежесть (чем дольше не выбиралась, тем больше вес)
+    3. Выполняет взвешенный случайный выбор
     
     Args:
-        weights_dict: Словарь {gallery_id: weight} с весами галерей
+        weights_dict: Словарь {gallery_id: weight} с весами из БД
+        all_galleries: Список всех галерей из StashApp [{id, title, image_count}]
+        gallery_stats: Статистика по галереям {gallery_id: {viewed: int, total: int, last_selected: float}}
+        excluded_galleries: Множество ID исключенных галерей (опционально)
         
     Returns:
         Optional[str]: ID выбранной галереи или None если словарь пуст
     """
-    if not weights_dict:
-        return None
+    # Если список всех галерей не передан, используем старую логику (только галереи из БД)
+    if not all_galleries:
+        if not weights_dict:
+            return None
+        
+        total_weight = sum(weights_dict.values())
+        if total_weight <= 0:
+            logger.warning("Сумма весов галерей <= 0, невозможно выбрать галерею")
+            return None
+        
+        random_value = random.uniform(0, total_weight)
+        accumulated_weight = 0.0
+        for gallery_id, weight in weights_dict.items():
+            accumulated_weight += weight
+            if random_value <= accumulated_weight:
+                logger.debug(f"Выбрана галерея {gallery_id} с весом {weight:.3f} (random={random_value:.3f}, total={total_weight:.3f})")
+                return gallery_id
+        
+        last_gallery_id = list(weights_dict.keys())[-1]
+        logger.warning(f"Floating point edge case: возвращаем последнюю галерею {last_gallery_id}")
+        return last_gallery_id
     
-    # Вычисляем сумму всех весов
-    total_weight = sum(weights_dict.values())
+    # Новая логика: работаем со всеми галереями из StashApp
+    gallery_stats = gallery_stats or {}
+    excluded_galleries = excluded_galleries or set()
+    current_time = time.time()
+    modified_weights = {}
     
+    # Проходим по всем галереям из StashApp
+    for gallery in all_galleries:
+        gallery_id = gallery['id']
+        
+        # Пропускаем исключенные галереи
+        if gallery_id in excluded_galleries:
+            logger.debug(f"Пропускаем исключенную галерею {gallery_id}")
+            continue
+        
+        total_images = gallery.get('image_count', 0)
+        
+        # Получаем вес из БД или используем 1.0 по умолчанию
+        base_weight = weights_dict.get(gallery_id, 1.0)
+        
+        # Если вес равен 0 или отрицательный, пропускаем (возможно, галерея исключена)
+        if base_weight <= 0:
+            logger.debug(f"Пропускаем галерею {gallery_id} с неположительным весом {base_weight}")
+            continue
+        
+        # Получаем статистику
+        stats = gallery_stats.get(gallery_id, {})
+        viewed = stats.get('viewed', 0)
+        last_selected = stats.get('last_selected', 0)
+        
+        # 1. Штраф за просмотренность (чем больше просмотрено, тем меньше вес)
+        if total_images > 0:
+            coverage_ratio = viewed / total_images  # 0.0 - 1.0
+            # Если просмотрено 50%, вес уменьшается на 25%
+            # Если просмотрено 100%, вес уменьшается на 50%
+            coverage_penalty = 1.0 - (coverage_ratio * 0.5)
+        else:
+            coverage_ratio = 0.0  # Для логирования
+            coverage_penalty = 1.0
+        
+        # 2. Бонус за свежесть (время с последнего выбора)
+        if last_selected == 0:
+            days_since = 999  # Никогда не выбиралась - максимальный бонус
+        else:
+            days_since = (current_time - last_selected) / 86400
+        
+        # Бонус: +50% за каждый день без выбора (макс +200% за 4+ дня)
+        freshness_bonus = min(days_since * 0.5, 2.0)
+        freshness_multiplier = 1.0 + freshness_bonus
+        
+        # Финальный вес
+        modified_weight = base_weight * coverage_penalty * freshness_multiplier
+        
+        # Проверяем, что вес не стал отрицательным или нулевым
+        if modified_weight <= 0:
+            logger.debug(f"Пропускаем галерею {gallery_id} с нулевым/отрицательным модифицированным весом")
+            continue
+        
+        modified_weights[gallery_id] = modified_weight
+        
+        logger.debug(
+            f"Галерея {gallery.get('title', gallery_id)}: base={base_weight:.2f}, "
+            f"viewed={viewed}/{total_images}, coverage={coverage_ratio*100:.1f}%, "
+            f"days_since={days_since:.1f}, final={modified_weight:.2f}"
+        )
+    
+    # Стандартный алгоритм взвешенного выбора
+    total_weight = sum(modified_weights.values())
     if total_weight <= 0:
-        logger.warning("Сумма весов галерей <= 0, невозможно выбрать галерею")
+        logger.warning("Сумма модифицированных весов <= 0")
         return None
     
-    # Генерируем случайное число от 0 до суммы весов
     random_value = random.uniform(0, total_weight)
-    
-    # Проходим по галереям, накапливая веса
     accumulated_weight = 0.0
-    for gallery_id, weight in weights_dict.items():
+    
+    for gallery_id, weight in modified_weights.items():
         accumulated_weight += weight
         if random_value <= accumulated_weight:
-            logger.debug(f"Выбрана галерея {gallery_id} с весом {weight:.3f} (random={random_value:.3f}, total={total_weight:.3f})")
+            # Находим название галереи для лога
+            gallery_title = next(
+                (g.get('title', gallery_id) for g in all_galleries if g['id'] == gallery_id),
+                gallery_id
+            )
+            logger.info(
+                f"Выбрана галерея {gallery_title} ({gallery_id}) "
+                f"с модифицированным весом {weight:.3f} "
+                f"(random={random_value:.3f}, total={total_weight:.3f})"
+            )
             return gallery_id
     
-    # На всякий случай (не должно произойти из-за floating point ошибок)
-    # Возвращаем последнюю галерею
-    last_gallery_id = list(weights_dict.keys())[-1]
+    # Fallback
+    last_gallery_id = list(modified_weights.keys())[-1]
     logger.warning(f"Floating point edge case: возвращаем последнюю галерею {last_gallery_id}")
     return last_gallery_id
 
@@ -139,6 +241,11 @@ class StashClient:
         #                          "actual": {"unrated": 0, "positive": 0, "negative": 0, "none": 0},
         #                          "fallback": 0}}
         self._category_metrics: Dict[str, Dict[str, Any]] = {}
+        
+        # Кэш для списка всех галерей
+        self._all_galleries_cache: Optional[List[Dict[str, Any]]] = None
+        self._galleries_cache_time: float = 0
+        self._galleries_cache_ttl: int = 3600  # 1 час
         
         # Создаем BasicAuth если есть логин/пароль
         if self.username and self.password:
@@ -998,6 +1105,63 @@ class StashClient:
         except Exception as e:
             logger.error(f"Ошибка при получении количества изображений для галереи {gallery_id}: {e}")
             return None
+    
+    async def get_all_galleries(self) -> List[Dict[str, Any]]:
+        """
+        Получение списка всех галерей из StashApp.
+        
+        Returns:
+            List[Dict]: Список галерей с id, title, image_count
+        """
+        query = """
+        query GetAllGalleries {
+          findGalleries(
+            filter: {
+              per_page: 10000
+              sort: "title"
+            }
+          ) {
+            count
+            galleries {
+              id
+              title
+              image_count
+            }
+          }
+        }
+        """
+        
+        try:
+            data = await self._execute_query(query)
+            galleries = data.get('findGalleries', {}).get('galleries', [])
+            count = data.get('findGalleries', {}).get('count', 0)
+            logger.info(f"Получено {len(galleries)} галерей из StashApp (всего: {count})")
+            return galleries
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка галерей: {e}")
+            return []
+    
+    async def get_all_galleries_cached(self) -> List[Dict[str, Any]]:
+        """
+        Получение списка всех галерей с кэшированием.
+        
+        Returns:
+            List[Dict]: Список галерей
+        """
+        current_time = time.perf_counter()
+        
+        # Проверяем кэш
+        if (self._all_galleries_cache and 
+            (current_time - self._galleries_cache_time) < self._galleries_cache_ttl):
+            logger.debug(f"Используется кэшированный список галерей ({len(self._all_galleries_cache)} галерей)")
+            return self._all_galleries_cache
+        
+        # Обновляем кэш
+        galleries = await self.get_all_galleries()
+        self._all_galleries_cache = galleries
+        self._galleries_cache_time = current_time
+        
+        return galleries
     
     async def get_random_image_weighted(
         self,
