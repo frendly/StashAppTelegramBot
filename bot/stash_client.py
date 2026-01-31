@@ -563,7 +563,7 @@ class StashClient:
         if gallery_id not in self._category_metrics:
             self._category_metrics[gallery_id] = {
                 "selected": {"unrated": 0, "positive": 0, "negative": 0},
-                "actual": {"unrated": 0, "positive": 0, "negative": 0, "none": 0},
+                "actual": {"unrated": 0, "positive": 0, "negative": 0, "any": 0, "none": 0},
                 "fallback": 0
             }
         
@@ -574,8 +574,10 @@ class StashClient:
             metrics["selected"][selected_category] += 1
         
         # Обновляем счетчик фактически использованной категории
-        if actual_category in metrics["actual"]:
-            metrics["actual"][actual_category] += 1
+        # Если категория "any" еще не существует, добавляем её
+        if actual_category not in metrics["actual"]:
+            metrics["actual"][actual_category] = 0
+        metrics["actual"][actual_category] += 1
         
         # Обновляем счетчик fallback
         if used_fallback:
@@ -594,10 +596,25 @@ class StashClient:
         if gallery_id:
             return self._category_metrics.get(gallery_id, {
                 "selected": {"unrated": 0, "positive": 0, "negative": 0},
-                "actual": {"unrated": 0, "positive": 0, "negative": 0, "none": 0},
+                "actual": {"unrated": 0, "positive": 0, "negative": 0, "any": 0, "none": 0},
                 "fallback": 0
             })
         return self._category_metrics.copy()
+    
+    def _calculate_actual_percentages(self, actual: Dict[str, int]) -> Dict[str, float]:
+        """
+        Вычисление процентов для фактических категорий (исключая 'none').
+        
+        Args:
+            actual: Словарь с количеством изображений по категориям
+            
+        Returns:
+            Dict[str, float]: Словарь с процентами для каждой категории (кроме 'none')
+        """
+        actual_total_with_images = sum(v for k, v in actual.items() if k != "none")
+        if actual_total_with_images == 0:
+            return {k: 0.0 for k in actual.keys() if k != "none"}
+        return {k: (v / actual_total_with_images * 100) for k, v in actual.items() if k != "none"}
     
     def log_category_metrics(self, gallery_id: Optional[str] = None):
         """
@@ -621,23 +638,25 @@ class StashClient:
             
             if total_selected > 0:
                 selected_pct = {k: (v / total_selected * 100) for k, v in selected.items()}
-                actual_pct = {k: (v / total_actual * 100) if total_actual > 0 else 0 for k, v in actual.items()}
                 fallback_pct = (fallback / total_selected * 100) if total_selected > 0 else 0
                 
-                # Формируем строку для фактических категорий (исключаем "none" из процентов, но показываем отдельно)
-                actual_total_with_images = total_actual - actual.get("none", 0)
-                actual_pct_with_images = {k: (v / actual_total_with_images * 100) if actual_total_with_images > 0 else 0 
-                                         for k, v in actual.items() if k != "none"}
+                # Вычисляем проценты для фактических категорий (исключая "none")
+                actual_pct_with_images = self._calculate_actual_percentages(actual)
+                
+                # Формируем строку для фактических категорий
+                actual_parts = []
+                for cat in ["unrated", "positive", "negative", "any"]:
+                    if cat in actual:
+                        count = actual[cat]
+                        pct = actual_pct_with_images.get(cat, 0)
+                        actual_parts.append(f"{cat}={count} ({pct:.1f}%)")
                 
                 logger.info(
                     f"📊 Метрики для галереи {gallery_id}:\n"
                     f"  Выбрано: unrated={selected['unrated']} ({selected_pct['unrated']:.1f}%), "
                     f"positive={selected['positive']} ({selected_pct['positive']:.1f}%), "
                     f"negative={selected['negative']} ({selected_pct['negative']:.1f}%)\n"
-                    f"  Фактически: unrated={actual['unrated']} ({actual_pct_with_images.get('unrated', 0):.1f}%), "
-                    f"positive={actual['positive']} ({actual_pct_with_images.get('positive', 0):.1f}%), "
-                    f"negative={actual['negative']} ({actual_pct_with_images.get('negative', 0):.1f}%), "
-                    f"none={actual.get('none', 0)}\n"
+                    f"  Фактически: {', '.join(actual_parts)}, none={actual.get('none', 0)}\n"
                     f"  Fallback: {fallback} ({fallback_pct:.1f}%)"
                 )
             else:
@@ -659,16 +678,24 @@ class StashClient:
                 
                 if total_selected > 0:
                     selected_pct = {k: (v / total_selected * 100) for k, v in selected.items()}
-                    actual_total_with_images = total_actual - actual.get("none", 0)
-                    actual_pct_with_images = {k: (v / actual_total_with_images * 100) if actual_total_with_images > 0 else 0 
-                                             for k, v in actual.items() if k != "none"}
                     fallback_pct = (fallback / total_selected * 100) if total_selected > 0 else 0
+                    
+                    # Вычисляем проценты для фактических категорий (исключая "none")
+                    actual_pct_with_images = self._calculate_actual_percentages(actual)
+                    actual_total_with_images = sum(v for k, v in actual.items() if k != "none")
+                    
+                    # Формируем строку для фактических категорий
+                    actual_parts = []
+                    for cat in ["unrated", "positive", "negative", "any"]:
+                        if cat in actual:
+                            count = actual[cat]
+                            pct = actual_pct_with_images.get(cat, 0)
+                            actual_parts.append(f"{cat}={count} ({pct:.1f}%)")
                     
                     logger.info(
                         f"  Галерея {gid}: выбрано={total_selected} (unrated={selected_pct['unrated']:.1f}%, "
                         f"positive={selected_pct['positive']:.1f}%, negative={selected_pct['negative']:.1f}%), "
-                        f"фактически={actual_total_with_images} (unrated={actual_pct_with_images.get('unrated', 0):.1f}%, "
-                        f"positive={actual_pct_with_images.get('positive', 0):.1f}%, negative={actual_pct_with_images.get('negative', 0):.1f}%, "
+                        f"фактически={actual_total_with_images} ({', '.join(actual_parts)}, "
                         f"none={actual.get('none', 0)}), fallback={fallback_pct:.1f}%"
                     )
     
@@ -699,6 +726,9 @@ class StashClient:
         - 70% неоцененные изображения (rating100 IS NULL)
         - 20% изображения с "+" (rating100 >= 80)
         - 10% изображения с "-" (rating100 <= 20)
+        
+        Если все категории пусты, используется fallback на получение любого изображения
+        из галереи без фильтра по рейтингу (для изображений с рейтингом 21-79).
         
         Args:
             gallery_id: ID галереи
@@ -766,9 +796,32 @@ class StashClient:
                 logger.warning(f"Ошибка при получении изображений из категории {category} для галереи {gallery_id}: {e}")
                 continue
         
-        # Если все категории пустые, возвращаем None
+        # Если все категории пустые, пробуем получить любое изображение из галереи без фильтра по рейтингу
+        # Это нужно для случаев, когда в галерее есть изображения с рейтингом 21-79, которые не попадают
+        # ни в одну из трех категорий (unrated, positive >= 80, negative <= 20)
+        logger.info(f"Все категории пусты для галереи {gallery_id}, пробуем получить любое изображение без фильтра по рейтингу")
+        try:
+            image = await self.get_random_image_from_gallery(
+                gallery_id=gallery_id,
+                exclude_ids=exclude_ids
+            )
+            
+            if image:
+                used_fallback = True
+                actual_category = "any"  # Специальная категория для изображений без фильтра по рейтингу
+                
+                # Обновляем метрики
+                self._update_category_metrics(gallery_id, selected_category, actual_category, used_fallback)
+                
+                total_duration = time.perf_counter() - start_time
+                logger.info(f"⏱️  get_random_image_from_gallery_weighted: {total_duration:.3f}s (gallery: {gallery_id}, selected: {selected_category}, actual: {actual_category}, fallback: {used_fallback}, no-rating-filter)")
+                return image
+        except Exception as e:
+            logger.warning(f"Ошибка при получении изображения без фильтра по рейтингу для галереи {gallery_id}: {e}")
+        
+        # Если и это не помогло, возвращаем None
         total_duration = time.perf_counter() - start_time
-        logger.warning(f"⏱️  get_random_image_from_gallery_weighted: не найдено изображений в галерее {gallery_id} после {total_duration:.3f}s (все категории пусты)")
+        logger.warning(f"⏱️  get_random_image_from_gallery_weighted: не найдено изображений в галерее {gallery_id} после {total_duration:.3f}s (все категории пусты и fallback не помог)")
         
         # Обновляем метрики (даже если ничего не найдено)
         self._update_category_metrics(gallery_id, selected_category, "none", used_fallback=False)
