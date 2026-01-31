@@ -364,3 +364,53 @@ class PreferencesRepository:
             
             conn.commit()
             logger.debug(f"Уведомление о пороге для галереи {gallery_id} отмечено как показанное")
+    
+    def ensure_gallery_exists(self, gallery_id: str, gallery_title: str) -> bool:
+        """
+        Убедиться, что галерея существует в базе с весом по умолчанию.
+        Если галереи нет, создает запись с весом 1.0.
+        Если галерея существует, обновляет название (на случай, если оно изменилось).
+        
+        Args:
+            gallery_id: ID галереи
+            gallery_title: Название галереи
+            
+        Returns:
+            bool: True если галерея была создана, False если уже существовала
+        """
+        if not gallery_id or not gallery_title:
+            logger.warning(f"Попытка создать галерею с пустыми параметрами: gallery_id={gallery_id}, gallery_title={gallery_title}")
+            return False
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Используем INSERT OR IGNORE для избежания race conditions
+            # Если галерея уже существует, INSERT OR IGNORE просто проигнорирует операцию
+            cursor.execute("""
+                INSERT OR IGNORE INTO gallery_preferences
+                (gallery_id, gallery_title, weight, total_votes, positive_votes, negative_votes, score, excluded, updated_at)
+                VALUES (?, ?, 1.0, 0, 0, 0, 0.0, FALSE, CURRENT_TIMESTAMP)
+            """, (gallery_id, gallery_title))
+            
+            # Проверяем, была ли создана новая запись
+            # В SQLite rowcount для INSERT OR IGNORE возвращает 1 если вставка произошла, 0 если проигнорирована
+            gallery_created = cursor.rowcount > 0
+            
+            # Обновляем название галереи, если оно изменилось
+            # Это нужно делать всегда (не только если галерея не была создана),
+            # так как название в Stash могло измениться
+            cursor.execute("""
+                UPDATE gallery_preferences
+                SET gallery_title = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE gallery_id = ? AND gallery_title != ?
+            """, (gallery_title, gallery_id, gallery_title))
+            
+            conn.commit()
+            
+            if gallery_created:
+                logger.debug(f"Создана запись для галереи: {gallery_title} (ID: {gallery_id}) с весом 1.0")
+            else:
+                logger.debug(f"Галерея {gallery_id} уже существует в базе")
+            
+            return gallery_created

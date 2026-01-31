@@ -149,6 +149,19 @@ class TelegramHandler:
                         )
                     return False
                 
+                # Автоматически добавляем галерею в базу, если её там еще нет
+                # Это нужно для того, чтобы все галереи участвовали во взвешенном выборе
+                if image.gallery_id and image.gallery_title:
+                    try:
+                        gallery_created = self.database.ensure_gallery_exists(image.gallery_id, image.gallery_title)
+                        if gallery_created:
+                            # Инвалидируем кэш весов, если галерея была создана
+                            if self.voting_manager:
+                                self.voting_manager.invalidate_weights_cache()
+                            logger.debug(f"Галерея '{image.gallery_title}' добавлена в базу с весом 1.0")
+                    except Exception as e:
+                        logger.warning(f"Ошибка при инициализации галереи {image.gallery_id}: {e}")
+                
                 # Скачивание изображения
                 image_data = await self.stash_client.download_image(image.image_url)
                 timer.checkpoint("Download image")
