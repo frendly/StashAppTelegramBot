@@ -258,28 +258,28 @@ class TelegramHandler:
                 selected_gallery_id = select_gallery_by_weight(weights_dict)
                 
                 if selected_gallery_id:
-                    # Получаем случайное изображение из выбранной галереи
-                    image = await self.stash_client.get_random_image_from_gallery(
+                    # Получаем случайное изображение из выбранной галереи с учетом приоритетов по рейтингу
+                    image = await self.stash_client.get_random_image_from_gallery_weighted(
                         gallery_id=selected_gallery_id,
                         exclude_ids=exclude_ids
                     )
                     
                     if image:
-                        logger.debug(f"Изображение получено из галереи {selected_gallery_id} (взвешенный выбор)")
+                        logger.debug(f"Изображение получено из галереи {selected_gallery_id} (взвешенный выбор с приоритетами по рейтингу)")
                         return image
                     else:
-                        logger.warning(f"Не удалось получить изображение из галереи {selected_gallery_id}, используем fallback")
+                        logger.warning(f"🔄 Fallback level 1: Не удалось получить изображение из галереи {selected_gallery_id} (все категории пусты), используем старый метод с фильтрацией")
                 else:
-                    logger.warning("Не удалось выбрать галерею взвешенным выбором, используем fallback")
+                    logger.warning("🔄 Fallback level 1: Не удалось выбрать галерею взвешенным выбором, используем старый метод с фильтрацией")
             else:
-                logger.warning("Веса галерей отсутствуют или пусты, используем fallback")
+                logger.warning("🔄 Fallback level 1: Веса галерей отсутствуют или пусты, используем старый метод с фильтрацией")
         except Exception as e:
-            logger.warning(f"Ошибка при взвешенном выборе галереи: {e}, используем fallback", exc_info=True)
+            logger.warning(f"🔄 Fallback level 1: Ошибка при взвешенном выборе галереи: {e}, используем старый метод с фильтрацией", exc_info=True)
         
-        # Fallback: используем старый метод с фильтрацией
+        # Fallback level 1: используем старый метод с фильтрацией
         try:
             filtering_lists = self.voting_manager.get_filtering_lists()
-            return await self.stash_client.get_random_image_weighted(
+            image = await self.stash_client.get_random_image_weighted(
                 exclude_ids=exclude_ids,
                 blacklisted_performers=filtering_lists['blacklisted_performers'],
                 blacklisted_galleries=filtering_lists['blacklisted_galleries'],
@@ -287,13 +287,20 @@ class TelegramHandler:
                 whitelisted_galleries=filtering_lists['whitelisted_galleries'],
                 max_retries=5
             )
+            if image:
+                logger.info("✅ Fallback level 1 успешен: изображение получено через старый метод с фильтрацией")
+                return image
+            else:
+                logger.warning("🔄 Fallback level 2: Старый метод с фильтрацией не вернул изображение, используем базовый метод")
         except Exception as e:
-            logger.warning(f"Ошибка при fallback методе с фильтрацией: {e}, используем базовый метод")
-            # Последний fallback: базовый метод без фильтрации
-            return await self.stash_client.get_random_image_with_retry(
-                exclude_ids=exclude_ids,
-                max_retries=5
-            )
+            logger.warning(f"🔄 Fallback level 2: Ошибка при fallback методе с фильтрацией: {e}, используем базовый метод", exc_info=True)
+        
+        # Fallback level 2: базовый метод без фильтрации
+        logger.info("🔄 Fallback level 2: Используем базовый метод без фильтрации")
+        return await self.stash_client.get_random_image_with_retry(
+            exclude_ids=exclude_ids,
+            max_retries=5
+        )
     
     def _format_caption(self, image: StashImage) -> str:
         """

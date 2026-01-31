@@ -92,6 +92,37 @@ class VotesRepository:
                 'voted_at': result[6]
             }
     
+    def get_image_vote_status(self, image_id: str) -> Optional[int]:
+        """
+        Получение статуса голосования за изображение.
+        
+        Args:
+            image_id: ID изображения
+            
+        Returns:
+            Optional[int]: None (неоцененное), 1 (плюс), -1 (минус)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT vote
+                FROM votes 
+                WHERE image_id = ?
+            """, (image_id,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return None
+            
+            vote = result[0]
+            # Возвращаем 1 для положительного голоса, -1 для отрицательного
+            if vote > 0:
+                return 1
+            elif vote < 0:
+                return -1
+            else:
+                return None
+    
     def get_total_votes_count(self) -> Dict[str, int]:
         """
         Получение общего количества голосов.

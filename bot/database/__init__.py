@@ -40,6 +40,7 @@ class Database(DatabaseBase):
         # Votes methods
         self.add_vote = self.votes_repo.add_vote
         self.get_vote = self.votes_repo.get_vote
+        self.get_image_vote_status = self.votes_repo.get_image_vote_status
         self.get_total_votes_count = self.votes_repo.get_total_votes_count
         
         # Preferences methods

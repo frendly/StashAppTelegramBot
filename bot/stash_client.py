@@ -111,6 +111,12 @@ class StashClient:
         self.session: Optional[aiohttp.ClientSession] = None
         self.auth: Optional[aiohttp.BasicAuth] = None
         
+        # Метрики для отслеживания распределения категорий
+        # Структура: {gallery_id: {"selected": {"unrated": 0, "positive": 0, "negative": 0},
+        #                          "actual": {"unrated": 0, "positive": 0, "negative": 0, "none": 0},
+        #                          "fallback": 0}}
+        self._category_metrics: Dict[str, Dict[str, Any]] = {}
+        
         # Создаем BasicAuth если есть логин/пароль
         if self.username and self.password:
             self.auth = aiohttp.BasicAuth(self.username, self.password)
@@ -322,6 +328,110 @@ class StashClient:
         logger.error(f"Не удалось получить изображение после {max_retries} попыток")
         return None
     
+    async def get_images_from_gallery_by_rating(
+        self,
+        gallery_id: str,
+        rating_filter: str,
+        exclude_ids: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Получение изображений из галереи с фильтром по рейтингу.
+        
+        Args:
+            gallery_id: ID галереи
+            rating_filter: Фильтр рейтинга - "unrated", "positive", "negative"
+            exclude_ids: Список ID изображений для исключения
+            
+        Returns:
+            List[Dict[str, Any]]: Список изображений или пустой список
+        """
+        start_time = time.perf_counter()
+        
+        # Формируем параметры фильтра по рейтингу
+        if rating_filter == "unrated":
+            # Неоцененные: используем модификатор IS_NULL
+            rating_value = 0  # Значение не важно для IS_NULL, но требуется схемой
+            rating_modifier = "IS_NULL"
+        elif rating_filter == "positive":
+            # С "+": rating100 >= 80 (используем GREATER_THAN как указано в документации)
+            rating_value = 80
+            rating_modifier = "GREATER_THAN"
+        elif rating_filter == "negative":
+            # С "-": rating100 <= 20 (используем LESS_THAN как указано в документации)
+            rating_value = 20
+            rating_modifier = "LESS_THAN"
+        else:
+            logger.error(f"Неизвестный фильтр рейтинга: {rating_filter}")
+            return []
+        
+        # Единый GraphQL запрос для всех случаев
+        query = """
+        query GetImagesFromGalleryByRating($gallery_id: ID!, $rating_value: Int!, $rating_modifier: CriterionModifier!) {
+          findImages(
+            image_filter: {
+              galleries: {
+                value: [$gallery_id]
+                modifier: INCLUDES
+              }
+              rating100: {
+                value: $rating_value
+                modifier: $rating_modifier
+              }
+            }
+            filter: {
+              per_page: 20
+              sort: "random"
+            }
+          ) {
+            images {
+              id
+              title
+              rating100
+              paths {
+                thumbnail
+                preview
+                image
+              }
+              galleries {
+                id
+                title
+              }
+              performers {
+                id
+                name
+              }
+            }
+          }
+        }
+        """
+        
+        variables = {
+            "gallery_id": gallery_id,
+            "rating_value": rating_value,
+            "rating_modifier": rating_modifier
+        }
+        
+        try:
+            query_start = time.perf_counter()
+            data = await self._execute_query(query, variables)
+            query_duration = time.perf_counter() - query_start
+            
+            images = data.get('findImages', {}).get('images', [])
+            
+            # Локальная фильтрация: исключаем изображения из exclude_ids
+            if exclude_ids:
+                exclude_set = set(exclude_ids)
+                images = [img for img in images if img['id'] not in exclude_set]
+            
+            total_duration = time.perf_counter() - start_time
+            logger.debug(f"⏱️  get_images_from_gallery_by_rating: {total_duration:.3f}s (query: {query_duration:.3f}s, gallery: {gallery_id}, filter: {rating_filter}, found: {len(images)})")
+            return images
+        
+        except Exception as e:
+            duration = time.perf_counter() - start_time
+            logger.error(f"⏱️  get_images_from_gallery_by_rating failed after {duration:.3f}s (gallery: {gallery_id}, filter: {rating_filter}): {e}")
+            return []
+    
     async def get_random_image_from_gallery(
         self,
         gallery_id: str,
@@ -416,6 +526,231 @@ class StashClient:
             duration = time.perf_counter() - start_time
             logger.error(f"⏱️  get_random_image_from_gallery failed after {duration:.3f}s (gallery: {gallery_id}): {e}")
             return None
+    
+    def _update_category_metrics(self, gallery_id: str, selected_category: str, actual_category: str, used_fallback: bool = False):
+        """
+        Обновление метрик распределения категорий.
+        
+        Args:
+            gallery_id: ID галереи
+            selected_category: Выбранная категория (по приоритетам)
+            actual_category: Фактически использованная категория
+            used_fallback: Использовался ли fallback
+        """
+        if gallery_id not in self._category_metrics:
+            self._category_metrics[gallery_id] = {
+                "selected": {"unrated": 0, "positive": 0, "negative": 0},
+                "actual": {"unrated": 0, "positive": 0, "negative": 0, "none": 0},
+                "fallback": 0
+            }
+        
+        metrics = self._category_metrics[gallery_id]
+        
+        # Обновляем счетчик выбранной категории
+        if selected_category in metrics["selected"]:
+            metrics["selected"][selected_category] += 1
+        
+        # Обновляем счетчик фактически использованной категории
+        if actual_category in metrics["actual"]:
+            metrics["actual"][actual_category] += 1
+        
+        # Обновляем счетчик fallback
+        if used_fallback:
+            metrics["fallback"] += 1
+    
+    def get_category_metrics(self, gallery_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Получение метрик распределения категорий.
+        
+        Args:
+            gallery_id: ID галереи (опционально, если None - возвращает все метрики)
+            
+        Returns:
+            Dict: Метрики распределения категорий
+        """
+        if gallery_id:
+            return self._category_metrics.get(gallery_id, {
+                "selected": {"unrated": 0, "positive": 0, "negative": 0},
+                "actual": {"unrated": 0, "positive": 0, "negative": 0, "none": 0},
+                "fallback": 0
+            })
+        return self._category_metrics.copy()
+    
+    def log_category_metrics(self, gallery_id: Optional[str] = None):
+        """
+        Логирование метрик распределения категорий.
+        
+        Args:
+            gallery_id: ID галереи (опционально, если None - логирует все метрики)
+        """
+        if gallery_id:
+            metrics = self._category_metrics.get(gallery_id)
+            if not metrics:
+                logger.info(f"📊 Метрики для галереи {gallery_id}: нет данных")
+                return
+            
+            selected = metrics["selected"]
+            actual = metrics["actual"]
+            fallback = metrics["fallback"]
+            
+            total_selected = sum(selected.values())
+            total_actual = sum(actual.values())
+            
+            if total_selected > 0:
+                selected_pct = {k: (v / total_selected * 100) for k, v in selected.items()}
+                actual_pct = {k: (v / total_actual * 100) if total_actual > 0 else 0 for k, v in actual.items()}
+                fallback_pct = (fallback / total_selected * 100) if total_selected > 0 else 0
+                
+                # Формируем строку для фактических категорий (исключаем "none" из процентов, но показываем отдельно)
+                actual_total_with_images = total_actual - actual.get("none", 0)
+                actual_pct_with_images = {k: (v / actual_total_with_images * 100) if actual_total_with_images > 0 else 0 
+                                         for k, v in actual.items() if k != "none"}
+                
+                logger.info(
+                    f"📊 Метрики для галереи {gallery_id}:\n"
+                    f"  Выбрано: unrated={selected['unrated']} ({selected_pct['unrated']:.1f}%), "
+                    f"positive={selected['positive']} ({selected_pct['positive']:.1f}%), "
+                    f"negative={selected['negative']} ({selected_pct['negative']:.1f}%)\n"
+                    f"  Фактически: unrated={actual['unrated']} ({actual_pct_with_images.get('unrated', 0):.1f}%), "
+                    f"positive={actual['positive']} ({actual_pct_with_images.get('positive', 0):.1f}%), "
+                    f"negative={actual['negative']} ({actual_pct_with_images.get('negative', 0):.1f}%), "
+                    f"none={actual.get('none', 0)}\n"
+                    f"  Fallback: {fallback} ({fallback_pct:.1f}%)"
+                )
+            else:
+                logger.info(f"📊 Метрики для галереи {gallery_id}: нет данных")
+        else:
+            # Логируем все метрики
+            if not self._category_metrics:
+                logger.info("📊 Метрики распределения категорий: нет данных")
+                return
+            
+            logger.info("📊 Метрики распределения категорий по всем галереям:")
+            for gid, metrics in self._category_metrics.items():
+                selected = metrics["selected"]
+                actual = metrics["actual"]
+                fallback = metrics["fallback"]
+                
+                total_selected = sum(selected.values())
+                total_actual = sum(actual.values())
+                
+                if total_selected > 0:
+                    selected_pct = {k: (v / total_selected * 100) for k, v in selected.items()}
+                    actual_total_with_images = total_actual - actual.get("none", 0)
+                    actual_pct_with_images = {k: (v / actual_total_with_images * 100) if actual_total_with_images > 0 else 0 
+                                             for k, v in actual.items() if k != "none"}
+                    fallback_pct = (fallback / total_selected * 100) if total_selected > 0 else 0
+                    
+                    logger.info(
+                        f"  Галерея {gid}: выбрано={total_selected} (unrated={selected_pct['unrated']:.1f}%, "
+                        f"positive={selected_pct['positive']:.1f}%, negative={selected_pct['negative']:.1f}%), "
+                        f"фактически={actual_total_with_images} (unrated={actual_pct_with_images.get('unrated', 0):.1f}%, "
+                        f"positive={actual_pct_with_images.get('positive', 0):.1f}%, negative={actual_pct_with_images.get('negative', 0):.1f}%, "
+                        f"none={actual.get('none', 0)}), fallback={fallback_pct:.1f}%"
+                    )
+    
+    def reset_category_metrics(self, gallery_id: Optional[str] = None):
+        """
+        Сброс метрик распределения категорий.
+        
+        Args:
+            gallery_id: ID галереи (опционально, если None - сбрасывает все метрики)
+        """
+        if gallery_id:
+            if gallery_id in self._category_metrics:
+                del self._category_metrics[gallery_id]
+                logger.debug(f"Метрики для галереи {gallery_id} сброшены")
+        else:
+            self._category_metrics.clear()
+            logger.debug("Все метрики распределения категорий сброшены")
+    
+    async def get_random_image_from_gallery_weighted(
+        self,
+        gallery_id: str,
+        exclude_ids: Optional[List[str]] = None
+    ) -> Optional[StashImage]:
+        """
+        Получение случайного изображения из галереи с учетом приоритетов по рейтингу.
+        
+        Приоритеты:
+        - 70% неоцененные изображения (rating100 IS NULL)
+        - 20% изображения с "+" (rating100 >= 80)
+        - 10% изображения с "-" (rating100 <= 20)
+        
+        Args:
+            gallery_id: ID галереи
+            exclude_ids: Список ID изображений для исключения
+            
+        Returns:
+            Optional[StashImage]: Случайное изображение или None
+        """
+        start_time = time.perf_counter()
+        
+        # Генерируем случайное число от 0 до 99 для выбора категории
+        random_value = random.randint(0, 99)
+        
+        # Определяем категорию по приоритетам
+        if random_value < 70:
+            # 0-69: неоцененные (70%)
+            selected_category = "unrated"
+            logger.debug(f"Выбрана категория: неоцененные (random={random_value})")
+        elif random_value < 90:
+            # 70-89: с "+" (20%)
+            selected_category = "positive"
+            logger.debug(f"Выбрана категория: с '+' (random={random_value})")
+        else:
+            # 90-99: с "-" (10%)
+            selected_category = "negative"
+            logger.debug(f"Выбрана категория: с '-' (random={random_value})")
+        
+        # Приоритет fallback: неоцененные > с + > с -
+        fallback_order = ["unrated", "positive", "negative"]
+        
+        # Пробуем получить изображение из выбранной категории и fallback категорий
+        used_fallback = False
+        actual_category = selected_category
+        
+        for idx, category in enumerate([selected_category] + [c for c in fallback_order if c != selected_category]):
+            try:
+                images = await self.get_images_from_gallery_by_rating(
+                    gallery_id=gallery_id,
+                    rating_filter=category,
+                    exclude_ids=exclude_ids
+                )
+                
+                if images:
+                    # Если это не первая попытка (не выбранная категория), значит использовался fallback
+                    if idx > 0:
+                        used_fallback = True
+                        logger.info(f"🔄 Fallback: категория '{selected_category}' пуста, использована '{category}' для галереи {gallery_id}")
+                    
+                    actual_category = category
+                    
+                    # Выбираем случайное изображение из списка
+                    image_data = random.choice(images)
+                    image = StashImage(image_data)
+                    
+                    # Обновляем метрики
+                    self._update_category_metrics(gallery_id, selected_category, actual_category, used_fallback)
+                    
+                    total_duration = time.perf_counter() - start_time
+                    logger.info(f"⏱️  get_random_image_from_gallery_weighted: {total_duration:.3f}s (gallery: {gallery_id}, selected: {selected_category}, actual: {actual_category}, fallback: {used_fallback})")
+                    return image
+                else:
+                    logger.debug(f"Категория {category} пуста для галереи {gallery_id}, пробуем следующую")
+            
+            except Exception as e:
+                logger.warning(f"Ошибка при получении изображений из категории {category} для галереи {gallery_id}: {e}")
+                continue
+        
+        # Если все категории пустые, возвращаем None
+        total_duration = time.perf_counter() - start_time
+        logger.warning(f"⏱️  get_random_image_from_gallery_weighted: не найдено изображений в галерее {gallery_id} после {total_duration:.3f}s (все категории пусты)")
+        
+        # Обновляем метрики (даже если ничего не найдено)
+        self._update_category_metrics(gallery_id, selected_category, "none", used_fallback=False)
+        
+        return None
     
     async def download_image(self, image_url: str) -> Optional[bytes]:
         """
