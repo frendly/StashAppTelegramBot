@@ -21,7 +21,14 @@ class SentPhotosRepository:
         """
         self.db_path = db_path
     
-    def add_sent_photo(self, image_id: str, user_id: Optional[int] = None, title: Optional[str] = None):
+    def add_sent_photo(
+        self, 
+        image_id: str, 
+        user_id: Optional[int] = None, 
+        title: Optional[str] = None,
+        file_id: Optional[str] = None,
+        file_id_high_quality: Optional[str] = None
+    ):
         """
         Добавление записи об отправленном фото.
         
@@ -29,15 +36,17 @@ class SentPhotosRepository:
             image_id: ID изображения из StashApp
             user_id: Telegram ID пользователя (опционально)
             title: Название изображения (опционально)
+            file_id: Telegram file_id для thumbnail (опционально)
+            file_id_high_quality: Telegram file_id для high quality (опционально)
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO sent_photos (image_id, user_id, title)
-                VALUES (?, ?, ?)
-            """, (image_id, user_id, title))
+                INSERT INTO sent_photos (image_id, user_id, title, file_id, file_id_high_quality)
+                VALUES (?, ?, ?, ?, ?)
+            """, (image_id, user_id, title, file_id, file_id_high_quality))
             conn.commit()
-            logger.debug(f"Добавлена запись о фото: image_id={image_id}")
+            logger.debug(f"Добавлена запись о фото: image_id={image_id}, file_id={file_id}, file_id_high_quality={file_id_high_quality}")
     
     def get_recent_image_ids(self, days: int) -> List[str]:
         """
@@ -171,3 +180,98 @@ class SentPhotosRepository:
             """, (user_id,))
             result = cursor.fetchone()
             return result if result else None
+    
+    def get_file_id(self, image_id: str, use_high_quality: bool = False) -> Optional[str]:
+        """
+        Получение file_id для изображения.
+        
+        Args:
+            image_id: ID изображения из StashApp
+            use_high_quality: Если True, возвращает file_id для высокого качества
+            
+        Returns:
+            Optional[str]: file_id или None если не найден
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Валидация имени колонки для безопасности
+            if use_high_quality:
+                query = """
+                    SELECT file_id_high_quality 
+                    FROM sent_photos 
+                    WHERE image_id = ? AND file_id_high_quality IS NOT NULL
+                    ORDER BY sent_at DESC 
+                    LIMIT 1
+                """
+            else:
+                query = """
+                    SELECT file_id 
+                    FROM sent_photos 
+                    WHERE image_id = ? AND file_id IS NOT NULL
+                    ORDER BY sent_at DESC 
+                    LIMIT 1
+                """
+            
+            cursor.execute(query, (image_id,))
+            result = cursor.fetchone()
+            return result[0] if result else None
+    
+    def save_file_id(self, image_id: str, file_id: str, use_high_quality: bool = False):
+        """
+        Сохранение file_id для изображения.
+        
+        Обновляет последнюю запись для данного image_id, если file_id еще не сохранен.
+        Если записи нет, создает новую запись.
+        
+        Args:
+            image_id: ID изображения из StashApp
+            file_id: Telegram file_id
+            use_high_quality: Если True, сохраняет file_id для высокого качества
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Валидация имени колонки для безопасности
+            if use_high_quality:
+                column = 'file_id_high_quality'
+            else:
+                column = 'file_id'
+            
+            # SQLite не поддерживает UPDATE с ORDER BY и LIMIT
+            # Используем подзапрос для получения ID последней записи
+            if use_high_quality:
+                update_query = """
+                    UPDATE sent_photos 
+                    SET file_id_high_quality = ?
+                    WHERE id = (
+                        SELECT id FROM sent_photos 
+                        WHERE image_id = ? AND file_id_high_quality IS NULL
+                        ORDER BY sent_at DESC 
+                        LIMIT 1
+                    )
+                """
+            else:
+                update_query = """
+                    UPDATE sent_photos 
+                    SET file_id = ?
+                    WHERE id = (
+                        SELECT id FROM sent_photos 
+                        WHERE image_id = ? AND file_id IS NULL
+                        ORDER BY sent_at DESC 
+                        LIMIT 1
+                    )
+                """
+            
+            cursor.execute(update_query, (file_id, image_id))
+            
+            # Если не было обновлено (нет записей или все уже имеют file_id), создаем новую запись
+            if cursor.rowcount == 0:
+                if use_high_quality:
+                    insert_query = "INSERT INTO sent_photos (image_id, file_id_high_quality) VALUES (?, ?)"
+                else:
+                    insert_query = "INSERT INTO sent_photos (image_id, file_id) VALUES (?, ?)"
+                cursor.execute(insert_query, (image_id, file_id))
+            
+            conn.commit()
+            logger.debug(f"Сохранен {column} для image_id={image_id}: {file_id}")

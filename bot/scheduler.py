@@ -99,6 +99,27 @@ class Scheduler:
                 )
                 logger.info("Задача добавлена: обновление статистики галерей (ежедневно в 3:00)")
             
+            # Добавление задачи предзагрузки изображений в служебный канал (каждую минуту)
+            if self.config.telegram.cache_channel_id and self.telegram_handler and self.database and self.stash_client:
+                preload_trigger = CronTrigger(
+                    minute='*',
+                    hour='*',
+                    day='*',
+                    month='*',
+                    day_of_week='*',
+                    timezone=tz
+                )
+                self.scheduler.add_job(
+                    self._preload_images_to_cache,
+                    trigger=preload_trigger,
+                    id="preload_images_to_cache",
+                    name="Предзагрузка изображений в служебный канал",
+                    replace_existing=True
+                )
+                logger.info(f"Задача добавлена: предзагрузка изображений в служебный канал (каждую минуту)")
+            elif self.config.telegram.cache_channel_id:
+                logger.warning("Предзагрузка изображений отключена: не инициализированы telegram_handler, database или stash_client")
+            
             logger.info(
                 f"Планировщик настроен: cron='{self.config.scheduler.cron}', "
                 f"timezone='{self.config.scheduler.timezone}'"
@@ -173,6 +194,70 @@ class Scheduler:
         
         except Exception as e:
             logger.error(f"Критическая ошибка при обновлении статистики галерей: {e}", exc_info=True)
+    
+    async def _preload_images_to_cache(self):
+        """
+        Фоновая задача предзагрузки изображений в служебный канал.
+        
+        Предзагружает 5 изображений high quality в служебный канал для получения file_id_high_quality.
+        Это ускоряет отправку изображений пользователям.
+        """
+        if not self.database or not self.stash_client or not self.telegram_handler:
+            logger.warning("Не удалось предзагрузить изображения: database, stash_client или telegram_handler не инициализированы")
+            return
+        
+        if not self.config.telegram.cache_channel_id:
+            logger.debug("Предзагрузка отключена: cache_channel_id не указан")
+            return
+        
+        try:
+            logger.debug("Начало предзагрузки изображений в служебный канал...")
+            
+            # Получение списка недавно отправленных ID
+            recent_ids = self.database.get_recent_image_ids(
+                self.config.history.avoid_recent_days
+            )
+            
+            # Получение 5 случайных изображений с учетом предпочтений
+            images_to_preload = []
+            for _ in range(5):
+                try:
+                    # Используем метод из telegram_handler для получения случайного изображения
+                    # Это обеспечивает единую логику выбора с учетом весов галерей и фильтров
+                    exclude_ids = recent_ids + [img.id for img in images_to_preload]
+                    image = await self.telegram_handler._get_random_image(exclude_ids)
+                    if image:
+                        images_to_preload.append(image)
+                except Exception as e:
+                    logger.warning(f"Ошибка при получении изображения для предзагрузки: {e}")
+                    continue
+            
+            if not images_to_preload:
+                logger.warning("Не удалось получить изображения для предзагрузки")
+                return
+            
+            logger.info(f"Получено {len(images_to_preload)} изображений для предзагрузки")
+            
+            # Предзагрузка каждого изображения
+            success_count = 0
+            error_count = 0
+            
+            for image in images_to_preload:
+                try:
+                    # Используем метод telegram_handler для предзагрузки
+                    await self.telegram_handler._preload_image_to_cache(image, use_high_quality=True)
+                    success_count += 1
+                except Exception as e:
+                    error_count += 1
+                    logger.warning(f"Ошибка при предзагрузке изображения {image.id}: {e}")
+            
+            logger.info(
+                f"Предзагрузка завершена: успешно {success_count}, ошибок {error_count} "
+                f"из {len(images_to_preload)} изображений"
+            )
+        
+        except Exception as e:
+            logger.error(f"Критическая ошибка при предзагрузке изображений: {e}", exc_info=True)
     
     def start(self):
         """Запуск планировщика."""

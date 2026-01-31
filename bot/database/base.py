@@ -53,6 +53,29 @@ class DatabaseBase:
                 ON sent_photos(sent_at)
             """)
             
+            # Миграция: добавление полей file_id для кеширования Telegram file_id
+            cursor.execute("PRAGMA table_info(sent_photos)")
+            sent_photos_columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'file_id' not in sent_photos_columns:
+                cursor.execute("ALTER TABLE sent_photos ADD COLUMN file_id TEXT")
+                logger.info("Добавлено поле file_id в sent_photos")
+            
+            if 'file_id_high_quality' not in sent_photos_columns:
+                cursor.execute("ALTER TABLE sent_photos ADD COLUMN file_id_high_quality TEXT")
+                logger.info("Добавлено поле file_id_high_quality в sent_photos")
+            
+            # Создание индекса для быстрого поиска по file_id
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sent_photos_file_id 
+                ON sent_photos(file_id)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sent_photos_file_id_high_quality 
+                ON sent_photos(file_id_high_quality)
+            """)
+            
             # Таблица голосований
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS votes (

@@ -12,6 +12,7 @@ class TelegramConfig:
     """Конфигурация Telegram бота."""
     bot_token: str
     allowed_user_ids: List[int]
+    cache_channel_id: Optional[int] = None
 
 
 @dataclass
@@ -79,7 +80,8 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
     
     telegram_config = TelegramConfig(
         bot_token=telegram_token,
-        allowed_user_ids=config_data['telegram']['allowed_user_ids']
+        allowed_user_ids=config_data['telegram']['allowed_user_ids'],
+        cache_channel_id=config_data['telegram'].get('cache_channel_id')
     )
     
     stash_config = StashConfig(

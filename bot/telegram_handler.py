@@ -106,6 +106,7 @@ class TelegramHandler:
             image = None
             image_data = None
             used_prefetch = False
+            cached_file_id = None  # file_id из кеша БД
             
             if self._prefetched_image and not use_high_quality:
                 # Предзагруженное изображение используется только для ручных команд (низкое качество)
@@ -168,19 +169,28 @@ class TelegramHandler:
                     except Exception as e:
                         logger.warning(f"Ошибка при инициализации галереи {image.gallery_id}: {e}")
                 
-                # Скачивание изображения с выбранным качеством
-                image_url = image.get_image_url(use_high_quality)
-                image_data = await self.stash_client.download_image(image_url)
-                timer.checkpoint("Download image")
+                # Проверка наличия file_id в кеше
+                # Для ручных запросов и крон-задач используем file_id_high_quality если есть
+                cached_file_id = self.database.get_file_id(image.id, use_high_quality=True)
                 
-                if not image_data:
-                    logger.error(f"Не удалось скачать изображение {image.id}")
-                    if context:
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="❌ Не удалось скачать изображение. Попробуйте позже."
-                        )
-                    return False
+                if cached_file_id:
+                    logger.info(f"⚡ Используется кешированный file_id_high_quality для image_id={image.id}")
+                    image_data = None  # Не нужно скачивать файл
+                    timer.checkpoint("Get cached file_id")
+                else:
+                    # Скачивание изображения с выбранным качеством
+                    image_url = image.get_image_url(use_high_quality)
+                    image_data = await self.stash_client.download_image(image_url)
+                    timer.checkpoint("Download image")
+                    
+                    if not image_data:
+                        logger.error(f"Не удалось скачать изображение {image.id}")
+                        if context:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ Не удалось скачать изображение. Попробуйте позже."
+                            )
+                        return False
             
             # Проверка достижения порога и формирование подписи
             should_show_threshold = False
@@ -226,29 +236,103 @@ class TelegramHandler:
             
             # Отправка фото
             send_start = time.perf_counter()
-            if context:
-                await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=image_data,
-                    caption=caption,
-                    parse_mode='HTML',
-                    reply_markup=reply_markup
-                )
-            else:
-                # Для планировщика используем application
-                if self.application:
-                    await self.application.bot.send_photo(
+            sent_message = None
+            file_id_to_save = None
+            
+            try:
+                if context:
+                    # Используем file_id если есть, иначе image_data
+                    photo_source = cached_file_id if cached_file_id else image_data
+                    sent_message = await context.bot.send_photo(
                         chat_id=chat_id,
-                        photo=image_data,
+                        photo=photo_source,
                         caption=caption,
                         parse_mode='HTML',
                         reply_markup=reply_markup
                     )
+                else:
+                    # Для планировщика используем application
+                    if self.application:
+                        photo_source = cached_file_id if cached_file_id else image_data
+                        sent_message = await self.application.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=photo_source,
+                            caption=caption,
+                            parse_mode='HTML',
+                            reply_markup=reply_markup
+                        )
+                
+                # Получаем file_id из ответа для сохранения
+                if sent_message and sent_message.photo:
+                    file_id_to_save = sent_message.photo[-1].file_id
+                
+            except TelegramError as e:
+                # Если file_id недействителен, пробуем загрузить файл
+                if cached_file_id and "file_id" in str(e).lower():
+                    logger.warning(f"file_id недействителен для {image.id}, загружаем файл: {e}")
+                    # Загружаем файл заново
+                    image_url = image.get_image_url(use_high_quality)
+                    image_data = await self.stash_client.download_image(image_url)
+                    if not image_data:
+                        logger.error(f"Не удалось скачать изображение {image.id} после ошибки file_id")
+                        if context:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ Не удалось отправить изображение. Попробуйте позже."
+                            )
+                        return False
+                    
+                    # Повторная отправка с файлом
+                    if context:
+                        sent_message = await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=image_data,
+                            caption=caption,
+                            parse_mode='HTML',
+                            reply_markup=reply_markup
+                        )
+                    else:
+                        if self.application:
+                            sent_message = await self.application.bot.send_photo(
+                                chat_id=chat_id,
+                                photo=image_data,
+                                caption=caption,
+                                parse_mode='HTML',
+                                reply_markup=reply_markup
+                            )
+                    
+                    if sent_message and sent_message.photo:
+                        file_id_to_save = sent_message.photo[-1].file_id
+                else:
+                    raise
+            
             timer.checkpoint("Send to Telegram")
             
             # Сохранение изображения в кэш для обработки голосования
             if user_id:
                 self._last_sent_images[user_id] = image
+            
+            # Сохранение file_id в БД если еще не сохранен
+            if file_id_to_save:
+                if use_high_quality:
+                    # Сохраняем file_id_high_quality
+                    existing_file_id = self.database.get_file_id(image.id, use_high_quality=True)
+                    if not existing_file_id:
+                        self.database.save_file_id(image.id, file_id_to_save, use_high_quality=True)
+                else:
+                    # Для ручных запросов
+                    if cached_file_id:
+                        # Использовали file_id_high_quality из кеша
+                        # Проверяем, сохранен ли он в БД, если нет - сохраняем
+                        existing_file_id_hq = self.database.get_file_id(image.id, use_high_quality=True)
+                        if not existing_file_id_hq:
+                            # Сохраняем file_id_high_quality (может отличаться от file_id_to_save)
+                            self.database.save_file_id(image.id, cached_file_id, use_high_quality=True)
+                    else:
+                        # Загрузили thumbnail, сохраняем file_id
+                        existing_file_id = self.database.get_file_id(image.id, use_high_quality=False)
+                        if not existing_file_id:
+                            self.database.save_file_id(image.id, file_id_to_save, use_high_quality=False)
             
             # Сохранение в базу данных
             self.database.add_sent_photo(
@@ -656,6 +740,60 @@ class TelegramHandler:
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при предзагрузке изображения: {e}")
+    
+    async def _preload_image_to_cache(self, image: StashImage, use_high_quality: bool = True):
+        """
+        Предзагрузка изображения в служебный канал для получения file_id.
+        
+        Args:
+            image: Объект изображения StashImage
+            use_high_quality: Если True, использует high quality версию
+        """
+        if not self.config.telegram.cache_channel_id:
+            logger.debug("Предзагрузка в канал отключена: cache_channel_id не указан")
+            return
+        
+        if not self.application:
+            logger.warning("Не удалось предзагрузить изображение: application не инициализирован")
+            return
+        
+        try:
+            # Проверяем, не сохранен ли уже file_id
+            existing_file_id = self.database.get_file_id(image.id, use_high_quality=use_high_quality)
+            if existing_file_id:
+                logger.debug(f"file_id для изображения {image.id} уже сохранен, пропускаем предзагрузку")
+                return
+            
+            # Скачивание изображения с выбранным качеством
+            image_url = image.get_image_url(use_high_quality=use_high_quality)
+            image_data = await self.stash_client.download_image(image_url)
+            
+            if not image_data:
+                logger.warning(f"Не удалось скачать изображение {image.id} для предзагрузки в канал")
+                return
+            
+            # Отправка в служебный канал
+            sent_message = await self.application.bot.send_photo(
+                chat_id=self.config.telegram.cache_channel_id,
+                photo=image_data
+            )
+            
+            # Получение file_id из ответа (берем самый большой размер)
+            file_id = sent_message.photo[-1].file_id
+            
+            # Сохранение file_id в БД
+            self.database.save_file_id(image.id, file_id, use_high_quality=use_high_quality)
+            
+            logger.info(
+                f"✅ Предзагружено изображение {image.id} в служебный канал "
+                f"({'high quality' if use_high_quality else 'thumbnail'}, "
+                f"{len(image_data) / 1024:.1f} KB, file_id={file_id[:20]}...)"
+            )
+        
+        except TelegramError as e:
+            logger.error(f"Ошибка Telegram при предзагрузке изображения {image.id} в канал: {e}")
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при предзагрузке изображения {image.id} в канал: {e}")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start."""
