@@ -81,7 +81,8 @@ class TelegramHandler:
         self,
         chat_id: int,
         user_id: Optional[int] = None,
-        context: Optional[ContextTypes.DEFAULT_TYPE] = None
+        context: Optional[ContextTypes.DEFAULT_TYPE] = None,
+        use_high_quality: bool = False
     ) -> bool:
         """
         Отправка случайного фото.
@@ -90,6 +91,8 @@ class TelegramHandler:
             chat_id: ID чата для отправки
             user_id: ID пользователя (для статистики)
             context: Контекст бота (опционально)
+            use_high_quality: Если True, использует preview качество (для автоматических задач)
+                            Если False, использует thumbnail (быстро, для ручных команд)
             
         Returns:
             bool: True если отправка успешна
@@ -103,7 +106,9 @@ class TelegramHandler:
             image_data = None
             used_prefetch = False
             
-            if self._prefetched_image:
+            if self._prefetched_image and not use_high_quality:
+                # Предзагруженное изображение используется только для ручных команд (низкое качество)
+                # Для автоматических задач (высокое качество) всегда загружаем новое
                 # Проверяем, что предзагруженное изображение еще актуально
                 recent_ids = self.database.get_recent_image_ids(
                     self.config.history.avoid_recent_days
@@ -162,8 +167,9 @@ class TelegramHandler:
                     except Exception as e:
                         logger.warning(f"Ошибка при инициализации галереи {image.gallery_id}: {e}")
                 
-                # Скачивание изображения
-                image_data = await self.stash_client.download_image(image.image_url)
+                # Скачивание изображения с выбранным качеством
+                image_url = image.get_image_url(use_high_quality)
+                image_data = await self.stash_client.download_image(image_url)
                 timer.checkpoint("Download image")
                 
                 if not image_data:
@@ -607,8 +613,9 @@ class TelegramHandler:
                     logger.warning("⚠️ Не удалось предзагрузить изображение")
                     return
                 
-                # Скачивание изображения
-                image_data = await self.stash_client.download_image(image.image_url)
+                # Скачивание изображения (предзагрузка всегда использует низкое качество для скорости)
+                image_url = image.get_image_url(use_high_quality=False)
+                image_data = await self.stash_client.download_image(image_url)
                 
                 if not image_data:
                     logger.warning(f"⚠️ Не удалось скачать изображение {image.id} для предзагрузки")
@@ -899,15 +906,16 @@ class TelegramHandler:
             reply_markup=self._get_persistent_keyboard()
         )
     
-    async def send_scheduled_photo(self, chat_id: int):
+    async def send_scheduled_photo(self, chat_id: int, user_id: int):
         """
         Отправка фото по расписанию.
         
         Args:
             chat_id: ID чата для отправки
+            user_id: ID пользователя (для работы кнопок голосования)
         """
-        logger.info(f"Отправка запланированного фото в chat_id={chat_id}")
-        await self._send_random_photo(chat_id, context=None)
+        logger.info(f"Отправка запланированного фото в chat_id={chat_id}, user_id={user_id}")
+        await self._send_random_photo(chat_id, user_id=user_id, context=None, use_high_quality=True)
     
     async def handle_vote_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """

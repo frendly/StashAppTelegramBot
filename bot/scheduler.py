@@ -116,7 +116,7 @@ class Scheduler:
         """
         try:
             logger.info(f"Выполнение запланированной отправки для user_id={user_id}")
-            await self.telegram_handler.send_scheduled_photo(chat_id=user_id)
+            await self.telegram_handler.send_scheduled_photo(chat_id=user_id, user_id=user_id)
         except Exception as e:
             logger.error(f"Ошибка при отправке запланированного фото: {e}")
     

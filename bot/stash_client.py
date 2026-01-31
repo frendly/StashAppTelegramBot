@@ -68,9 +68,14 @@ class StashImage:
         self.title = data.get('title', 'Без названия')
         self.rating = data.get('rating100', 0)
         
-        # Используем thumbnail для максимально быстрой загрузки, fallback на preview и оригинал
+        # Сохраняем все варианты качества для возможности выбора
         paths = data.get('paths', {})
-        self.image_url = paths.get('thumbnail') or paths.get('preview') or paths.get('image', '')
+        self._thumbnail_url = paths.get('thumbnail', '')
+        self._preview_url = paths.get('preview', '')
+        self._image_url = paths.get('image', '')
+        
+        # По умолчанию используем thumbnail для максимально быстрой загрузки
+        self.image_url = self._thumbnail_url or self._preview_url or self._image_url
         
         # Теги опциональны (могут не запрашиваться для ускорения)
         self.tags = [tag['name'] for tag in data.get('tags', [])]
@@ -85,6 +90,24 @@ class StashImage:
             {'id': p['id'], 'name': p['name']} 
             for p in data.get('performers', [])
         ]
+    
+    def get_image_url(self, use_high_quality: bool = False) -> str:
+        """
+        Получение URL изображения с указанным качеством.
+        
+        Args:
+            use_high_quality: Если True, использует preview (или image если preview нет)
+                            Если False, использует thumbnail (быстро, низкое качество)
+        
+        Returns:
+            str: URL изображения
+        """
+        if use_high_quality:
+            # Для высокого качества используем preview, fallback на image
+            return self._preview_url or self._image_url or self._thumbnail_url
+        else:
+            # Для быстрой загрузки используем thumbnail, fallback на preview и image
+            return self._thumbnail_url or self._preview_url or self._image_url
     
     def __repr__(self):
         return f"StashImage(id={self.id}, title={self.title}, rating={self.rating}, gallery={self.gallery_title})"
