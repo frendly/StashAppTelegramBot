@@ -302,6 +302,46 @@ class TelegramHandler:
             max_retries=5
         )
     
+    def _format_progress_bar(self, negative_votes: int, total_images: int, negative_percentage: Optional[float] = None) -> str:
+        """
+        Форматирование прогресс-бара для отображения процента минусов.
+        
+        Args:
+            negative_votes: Количество отрицательных голосов
+            total_images: Общее количество изображений в галерее
+            negative_percentage: Процент минусов (опционально, если не указан - вычисляется)
+            
+        Returns:
+            str: Отформатированный прогресс-бар или пустая строка если total_images == 0
+        """
+        if total_images == 0:
+            return ""
+        
+        # Защита от некорректных данных (negative_votes не может быть больше total_images)
+        negative_votes = max(0, min(negative_votes, total_images))
+        
+        # Расчет процента минусов (используем переданный или вычисляем)
+        if negative_percentage is None:
+            negative_percentage = (negative_votes / total_images) * 100.0
+        else:
+            # Ограничиваем процент 0-100 для безопасности
+            negative_percentage = max(0.0, min(100.0, negative_percentage))
+        
+        # Расчет заполненности прогресс-бара (10 символов, каждый = 10%)
+        filled = int((negative_votes / total_images) * 10)
+        filled = max(0, min(10, filled))  # Ограничение 0-10
+        
+        # Формирование прогресс-бара
+        filled_chars = "█" * filled
+        empty_chars = "░" * (10 - filled)
+        progress_bar = f"[{filled_chars}{empty_chars}]"
+        
+        # Цветовая индикация
+        color_emoji = "🔴" if negative_percentage >= 33.0 else "🟢"
+        
+        # Форматирование: [██████░░░░] 60% (12/20)
+        return f"{color_emoji} {progress_bar} {negative_percentage:.0f}% ({negative_votes}/{total_images})"
+    
     def _format_caption(self, image: StashImage) -> str:
         """
         Форматирование подписи к изображению.
@@ -324,6 +364,21 @@ class TelegramHandler:
         if image.tags:
             tags_str = ", ".join([f"#{tag.replace(' ', '_')}" for tag in image.tags[:5]])
             caption_parts.append(f"Теги: {tags_str}")
+        
+        # Добавление прогресс-бара, если есть статистика галереи
+        if image.gallery_id:
+            try:
+                gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
+                if gallery_stats and gallery_stats.get('total_images', 0) > 0:
+                    progress_bar = self._format_progress_bar(
+                        negative_votes=gallery_stats.get('negative_votes', 0),
+                        total_images=gallery_stats.get('total_images', 0),
+                        negative_percentage=gallery_stats.get('negative_percentage')  # Используем готовое значение из БД
+                    )
+                    if progress_bar:  # Проверка все еще нужна на случай edge cases
+                        caption_parts.append(f"Прогресс: {progress_bar}")
+            except Exception as e:
+                logger.warning(f"Ошибка при получении статистики галереи {image.gallery_id}: {e}")
         
         return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
     
