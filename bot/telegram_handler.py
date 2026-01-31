@@ -365,7 +365,7 @@ class TelegramHandler:
             timer.end()
             return False
     
-    async def _get_random_image(self, exclude_ids: List[str]) -> Optional[StashImage]:
+    async def _get_random_image(self, exclude_ids: List[str], update_last_selected: bool = True) -> Optional[StashImage]:
         """
         Получение случайного изображения с учетом фильтров и предпочтений.
         
@@ -374,6 +374,8 @@ class TelegramHandler:
         
         Args:
             exclude_ids: Список ID изображений для исключения
+            update_last_selected: Если True, обновляет время последнего выбора галереи.
+                                Если False, пропускает обновление (для служебных операций)
             
         Returns:
             Optional[StashImage]: Случайное изображение или None
@@ -412,11 +414,12 @@ class TelegramHandler:
                 )
                 
                 if selected_gallery_id:
-                    # Обновляем время последнего выбора галереи
-                    try:
-                        self.database.update_gallery_last_selected(selected_gallery_id)
-                    except Exception as e:
-                        logger.debug(f"Не удалось обновить last_selected_at для галереи {selected_gallery_id}: {e}")
+                    # Обновляем время последнего выбора галереи только если это не служебная операция
+                    if update_last_selected:
+                        try:
+                            self.database.update_gallery_last_selected(selected_gallery_id)
+                        except Exception as e:
+                            logger.debug(f"Не удалось обновить last_selected_at для галереи {selected_gallery_id}: {e}")
                     
                     # Получаем случайное изображение из выбранной галереи с учетом приоритетов по рейтингу
                     image = await self.stash_client.get_random_image_from_gallery_weighted(
