@@ -41,6 +41,9 @@ class Database(DatabaseBase):
         )
         self.get_file_id = self.sent_photos_repo.get_file_id
         self.save_file_id = self.sent_photos_repo.save_file_id
+        self.get_random_cached_image_id = (
+            self.sent_photos_repo.get_random_cached_image_id
+        )
 
         # Votes methods
         self.add_vote = self.votes_repo.add_vote
