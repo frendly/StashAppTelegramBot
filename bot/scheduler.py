@@ -227,11 +227,11 @@ class Scheduler:
             images_to_preload = []
             for _ in range(2):
                 try:
-                    # Используем метод из telegram_handler для получения случайного изображения
+                    # Используем публичный метод из telegram_handler для получения случайного изображения
                     # Это обеспечивает единую логику выбора с учетом весов галерей и фильтров
                     # update_last_selected=False - не обновляем статистику при предзагрузке в служебный канал
                     exclude_ids = recent_ids + [img.id for img in images_to_preload]
-                    image = await self.telegram_handler._get_random_image(exclude_ids, update_last_selected=False)
+                    image = await self.telegram_handler.get_random_image(exclude_ids, update_last_selected=False)
                     if image:
                         images_to_preload.append(image)
                 except Exception as e:
@@ -250,8 +250,8 @@ class Scheduler:
             
             for image in images_to_preload:
                 try:
-                    # Используем метод telegram_handler для предзагрузки
-                    await self.telegram_handler._preload_image_to_cache(image, use_high_quality=True)
+                    # Используем публичный метод telegram_handler для предзагрузки
+                    await self.telegram_handler.preload_image_to_cache(image, use_high_quality=True)
                     success_count += 1
                 except Exception as e:
                     error_count += 1
