@@ -1,7 +1,7 @@
 # StashApp Telegram Bot - Technical Reference
 
-> **Compact version for Cursor AI**  
-> Full docs: [CURSOR_FULL.md](CURSOR_FULL.md) | [README.md](README.md)  
+> **Compact version for Cursor AI**
+> Full docs: [CURSOR_FULL.md](CURSOR_FULL.md) | [README.md](README.md)
 > **⚠️ AI:** Always respond in Russian. Code comments must be in Russian.
 
 ---
@@ -20,13 +20,23 @@
 ### Components
 
 ```
-User ──→ Telegram Bot ──→ Handler ←── Scheduler (cron)
-                           ↓   ↓
-                 ┌─────────┴   └─────────┐
-                 ↓                       ↓
-           VotingManager            StashClient
-                 ↓                       ↓
-              Database              StashApp API
+User ──→ Telegram Bot ──→ TelegramHandler (Facade) ←── Scheduler (cron)
+                           ↓
+                 ┌─────────┴─────────┐
+                 ↓                   ↓
+         Handlers/              StashClient (Facade)
+         ├── CommandHandler          ↓
+         ├── PhotoSender        ┌────┴────┐
+         ├── VoteHandler        ↓         ↓
+         ├── ImageSelector   Services/  StashApp API
+         └── CaptionFormatter  ├── ImageService
+                               ├── GalleryService
+                               ├── RatingService
+                               └── StashGraphQLClient
+                 ↓
+           VotingManager
+                 ↓
+              Database
 ```
 
 ### Modules & Responsibilities
@@ -34,9 +44,19 @@ User ──→ Telegram Bot ──→ Handler ←── Scheduler (cron)
 | Module | Purpose | Key Functions |
 |--------|---------|---------------|
 | `main.py` | Entry point, lifecycle | `Bot.initialize()`, `start()`, `stop()` |
-| `telegram_handler.py` | Telegram commands | `random_command()`, `handle_vote_callback()`, `_send_random_photo()` |
+| `telegram_handler.py` | **Facade** for Telegram commands | `setup_handlers()`, delegates to handlers/ |
+| `handlers/command_handler.py` | Command processing | `start_command()`, `help_command()`, `stats_command()`, `preferences_command()` |
+| `handlers/photo_sender.py` | Photo sending logic | `send_random_photo()`, file_id caching |
+| `handlers/vote_handler.py` | Vote callback handling | `handle_vote_callback()`, vote processing |
+| `handlers/image_selector.py` | Image selection logic | Gallery selection, image fetching |
+| `handlers/caption_formatter.py` | Caption formatting | Format captions with gallery info |
 | `voting.py` | Voting system | `process_vote()`, `get_filtering_lists()`, `get_preferences_summary()` |
-| `stash_client.py` | GraphQL client | `get_random_image_weighted()`, `download_image()`, `update_image_rating()` |
+| `stash_client.py` | **Facade** for StashApp API | Delegates to stash/ services |
+| `stash/client.py` | GraphQL client | `execute_query()`, `download_image()`, `test_connection()` |
+| `stash/image_service.py` | Image operations | `get_random_image()`, `get_random_image_weighted()` |
+| `stash/gallery_service.py` | Gallery operations | `get_all_galleries()`, `get_gallery_image_count()` |
+| `stash/rating_service.py` | Rating operations | `update_image_rating()`, `update_gallery_rating()` |
+| `stash/selection.py` | Gallery selection | `select_gallery_by_weight()` |
 | `database/` | SQLite DB (repositories) | `add_vote()`, `get_recent_image_ids()`, `update_performer_preference()` |
 | `scheduler.py` | Cron scheduler | `start()`, `stop()` |
 | `performance.py` | Profiling | `@timing_decorator`, `PerformanceTimer` |
@@ -46,21 +66,26 @@ User ──→ Telegram Bot ──→ Handler ←── Scheduler (cron)
 
 **Command /random:**
 ```
-User → random_command() → Check auth → Get recent IDs (DB) 
-→ Get all galleries from StashApp (cached) → Get gallery weights (Voting, cached)
-→ Select gallery by weight (with coverage/freshness modifiers) → Get random image from selected gallery
+User → TelegramHandler.random_command() → CommandHandler (auth check)
+→ PhotoSender.send_random_photo() → ImageSelector.select_image()
+  → Get recent IDs (DB) → Get all galleries (GalleryService, cached)
+  → Get gallery weights (VotingManager, cached)
+  → Select gallery by weight (selection.py, with coverage/freshness modifiers)
+  → Get random image from gallery (ImageService)
 → Ensure gallery exists in DB (weight=1.0) → Check file_id cache (DB)
-→ If cached: use file_id, else: Download thumbnail → Send to Telegram with 👍👎 buttons
+→ If cached: use file_id, else: Download thumbnail (StashGraphQLClient)
+→ Format caption (CaptionFormatter) → Send to Telegram with 👍👎 buttons
 → Save file_id to DB → Save to DB → Prefetch next image (background)
 → Check exclusion threshold → Show exclusion button if threshold reached
 ```
 
 **Voting:**
 ```
-User clicks 👍/👎 → handle_vote_callback() → process_vote() (Voting)
-→ update_image_rating() (StashClient) → add_vote() (DB)
-→ update_performer_preference() (DB) → update_gallery_preference() (DB)
-→ update_gallery_weight() (DB, k=0.2) → Invalidate weights cache
+User clicks 👍/👎 → TelegramHandler.handle_vote_callback()
+→ VoteHandler.handle_vote() → VotingManager.process_vote()
+  → RatingService.update_image_rating() → add_vote() (DB)
+  → update_performer_preference() (DB) → update_gallery_preference() (DB)
+  → update_gallery_weight() (DB, k=0.2) → Invalidate weights cache
 → Check exclusion threshold → If reached: show exclusion button
 → Update button UI → Send result message → Auto-send next image if last
 ```
@@ -162,11 +187,11 @@ score = (positive_votes - negative_votes) / total_votes
 
 ### Target Metrics
 
-**Good:** Total time < 3 sec  
-**Acceptable:** 3-5 sec  
+**Good:** Total time < 3 sec
+**Acceptable:** 3-5 sec
 **Needs optimization:** > 5 sec
 
-**Details:** [`bot/performance.py`](bot/performance.py), [`bot/telegram_handler.py:220-271`](bot/telegram_handler.py)
+**Details:** [`bot/performance.py`](bot/performance.py), [`bot/handlers/photo_sender.py`](bot/handlers/photo_sender.py)
 
 ---
 
@@ -183,7 +208,7 @@ votes(id, image_id, user_id, vote, voted_at, gallery_id, performer_ids)
 UNIQUE(image_id, user_id)
 
 -- Performer preferences
-performer_preferences(performer_id, performer_name, positive_votes, 
+performer_preferences(performer_id, performer_name, positive_votes,
                      negative_votes, total_votes, score, updated_at)
 
 -- Gallery preferences
@@ -215,9 +240,10 @@ gallery_preferences(gallery_id, gallery_title, positive_votes,
 ## Common Development Tasks
 
 ### Add New Command
-1. In `telegram_handler.py`: create `new_command()` method
-2. Register handler: `application.add_handler(CommandHandler("new", self.new_command))`
-3. Update `/help` command with description
+1. In `handlers/command_handler.py`: create `new_command()` method
+2. In `telegram_handler.py`: add `async def new_command()` that delegates to `self.command_handler.new_command()`
+3. Register handler in `telegram_handler.py:setup_handlers()`: `application.add_handler(CommandHandler("new", self.new_command))`
+4. Update `/help` command in `command_handler.py:help_command()` with description
 
 ### Add DB Field
 1. In appropriate repository (e.g., `database/preferences.py`): add to `CREATE TABLE` statement
@@ -226,9 +252,9 @@ gallery_preferences(gallery_id, gallery_title, positive_votes,
 4. Migration: users need to recreate DB or run migration script
 
 ### Change Filtering Logic
-**File:** `bot/voting.py`  
-**Method:** `get_filtering_lists()`  
-**Used in:** `bot/stash_client.py:get_random_image_weighted()`
+**File:** `bot/voting.py`
+**Method:** `get_filtering_lists()`
+**Used in:** `bot/stash/image_service.py:get_random_image_weighted()`
 
 ### Add Profiling
 ```python
@@ -240,13 +266,13 @@ async def my_function():
 ```
 
 ### Debug Prefetch Issues
-**Check:** `telegram_handler.py:_prefetched_image` not None  
-**Check:** `asyncio.Lock` initialized  
-**Check:** Cache validation in `_send_random_photo()`
+**Check:** `photo_sender.py:_prefetched_image` not None
+**Check:** `asyncio.Lock` initialized
+**Check:** Cache validation in `photo_sender.py:send_random_photo()`
 
 ### Modify Vote Processing
-**File:** `bot/voting.py`  
-**Method:** `process_vote()`  
+**File:** `bot/voting.py`
+**Method:** `process_vote()`
 **Updates:** photo rating, votes table, performer/gallery preferences
 
 ---
@@ -265,7 +291,7 @@ async def my_function():
 
 ### GraphQL Errors
 - Verify StashApp API accessible
-- Check query format in `stash_client.py:_execute_query()`
+- Check query format in `stash/client.py:execute_query()`
 - Test connection: `await client.test_connection()`
 
 ### Slow Photo Sending
@@ -289,7 +315,7 @@ async def my_function():
 
 ```
 bot/
-├── main.py              # Entry point (~265 lines)
+├── main.py              # Entry point (~280 lines)
 ├── config.py            # Configuration (~125 lines)
 ├── database/            # SQLite DB (repository pattern)
 │   ├── __init__.py      # Main Database class
@@ -299,8 +325,24 @@ bot/
 │   ├── preferences.py   # Preferences repository
 │   ├── weights.py       # Weights repository
 │   └── statistics.py    # Statistics repository
-├── stash_client.py      # GraphQL client (~1300 lines)
-├── telegram_handler.py  # Telegram commands (~1425 lines)
+├── handlers/            # Telegram command handlers
+│   ├── __init__.py
+│   ├── command_handler.py    # Command processing
+│   ├── photo_sender.py        # Photo sending logic
+│   ├── vote_handler.py        # Vote callback handling
+│   ├── image_selector.py       # Image selection logic
+│   └── caption_formatter.py   # Caption formatting
+├── stash/               # StashApp API services
+│   ├── __init__.py
+│   ├── client.py            # GraphQL client
+│   ├── image_service.py      # Image operations
+│   ├── gallery_service.py    # Gallery operations
+│   ├── rating_service.py     # Rating operations
+│   ├── selection.py          # Gallery selection
+│   ├── metrics.py            # Category metrics
+│   └── models.py             # Data models
+├── stash_client.py      # Facade for StashApp API (~190 lines)
+├── telegram_handler.py  # Facade for Telegram commands (~320 lines)
 ├── scheduler.py         # Scheduler (~305 lines)
 ├── voting.py            # Voting system (~320 lines)
 └── performance.py       # Profiling (~168 lines)
@@ -321,9 +363,38 @@ CHANGELOG.md             # Version history
 
 **Total:** ~4000+ lines of code
 
+**Architecture:** Facade pattern - `telegram_handler.py` and `stash_client.py` are facades that delegate to specialized handlers/services
+
 ---
 
 ## Important Patterns
+
+### Facade Pattern
+
+```python
+# TelegramHandler - фасад для обработчиков команд
+class TelegramHandler:
+    def __init__(self, ...):
+        self.command_handler = CommandHandler(...)
+        self.photo_sender = PhotoSender(...)
+        self.vote_handler = VoteHandler(...)
+        # ...
+
+    async def random_command(self, update, context):
+        # Делегирует работу специализированным обработчикам
+        await self.photo_sender.send_random_photo(...)
+
+# StashClient - фасад для StashApp API
+class StashClient:
+    def __init__(self, ...):
+        self._image_service = ImageService(...)
+        self._gallery_service = GalleryService(...)
+        # ...
+
+    async def get_random_image(self, ...):
+        # Делегирует ImageService
+        return await self._image_service.get_random_image(...)
+```
 
 ### Async/await
 
@@ -451,9 +522,11 @@ python-dotenv==1.0.0      # .env
 - Deployment: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 ### Key Files
-- **Main logic:** [`bot/telegram_handler.py`](bot/telegram_handler.py)
+- **Main logic:** [`bot/telegram_handler.py`](bot/telegram_handler.py) (facade)
+- **Command handlers:** [`bot/handlers/`](bot/handlers/)
 - **Voting system:** [`bot/voting.py`](bot/voting.py)
-- **StashApp API:** [`bot/stash_client.py`](bot/stash_client.py)
+- **StashApp API:** [`bot/stash_client.py`](bot/stash_client.py) (facade)
+- **StashApp services:** [`bot/stash/`](bot/stash/)
 - **Database:** [`bot/database/`](bot/database/)
 
 ### External Resources
@@ -485,9 +558,9 @@ python-dotenv==1.0.0      # .env
 
 ---
 
-**Version:** 1.1.0 (compact)  
-**Date:** 2026-01-30  
-**Status:** ✅ Production Ready  
+**Version:** 1.2.0 (compact)
+**Date:** 2026-01-30
+**Status:** ✅ Production Ready
 **Last Updated:** 2026-01-30
 
 *Compact version for efficient work in Cursor AI. Details → [CURSOR_FULL.md](CURSOR_FULL.md)*

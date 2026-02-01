@@ -1,6 +1,6 @@
 # StashApp Telegram Bot - Техническая документация для разработки
 
-> **Главный документ для понимания проекта**  
+> **Главный документ для понимания проекта**
 > Последнее обновление: 2026-01-30
 
 ---
@@ -58,37 +58,64 @@
 graph TB
     User[Telegram User]
     Bot[Telegram Bot]
-    
+
     subgraph BotComponents [Bot Components]
-        Handler[telegram_handler.py<br/>Command Handlers]
+        TelegramHandler[telegram_handler.py<br/>Facade]
+        subgraph Handlers [handlers/]
+            CommandHandler[command_handler.py]
+            PhotoSender[photo_sender.py]
+            VoteHandler[vote_handler.py]
+            ImageSelector[image_selector.py]
+            CaptionFormatter[caption_formatter.py]
+        end
         Scheduler[scheduler.py<br/>Cron Jobs]
         Voting[voting.py<br/>Vote Manager]
     end
-    
+
     subgraph DataLayer [Data Layer]
-        Database[database.py<br/>SQLite]
-        StashClient[stash_client.py<br/>GraphQL Client]
+        Database[database/<br/>SQLite Repositories]
+        StashClient[stash_client.py<br/>Facade]
+        subgraph StashServices [stash/]
+            GraphQLClient[client.py<br/>GraphQL Client]
+            ImageService[image_service.py]
+            GalleryService[gallery_service.py]
+            RatingService[rating_service.py]
+            Selection[selection.py]
+        end
     end
-    
+
     subgraph External [External Services]
         StashApp[StashApp<br/>GraphQL API]
         TelegramAPI[Telegram API]
     end
-    
+
     User -->|commands| Bot
-    Bot --> Handler
-    Handler --> Voting
-    Handler --> Database
-    Handler --> StashClient
-    Scheduler --> Handler
+    Bot --> TelegramHandler
+    TelegramHandler --> CommandHandler
+    TelegramHandler --> PhotoSender
+    TelegramHandler --> VoteHandler
+    PhotoSender --> ImageSelector
+    PhotoSender --> CaptionFormatter
+    ImageSelector --> Voting
+    ImageSelector --> StashClient
+    VoteHandler --> Voting
+    Scheduler --> TelegramHandler
     Voting --> Database
     Voting --> StashClient
-    StashClient -->|GraphQL| StashApp
-    Handler -->|send photos| TelegramAPI
-    
+    StashClient --> ImageService
+    StashClient --> GalleryService
+    StashClient --> RatingService
+    ImageService --> GraphQLClient
+    GalleryService --> GraphQLClient
+    RatingService --> GraphQLClient
+    GraphQLClient -->|GraphQL| StashApp
+    PhotoSender -->|send photos| TelegramAPI
+
     style Bot fill:#e1f5ff
     style BotComponents fill:#f0f0f0
+    style Handlers fill:#e8f5e9
     style DataLayer fill:#fff4e1
+    style StashServices fill:#f3e5f5
     style External fill:#e8f5e9
 ```
 
@@ -274,14 +301,34 @@ CREATE INDEX idx_gallery_weight ON gallery_preferences(weight);
 - `get_gallery_statistics()` - получение статистики галереи
 - `get_galleries_needing_update()` - получение галерей, требующих обновления
 
-#### 4. `bot/stash_client.py` - Клиент StashApp
+#### 4. `bot/stash_client.py` - Фасад для StashApp API
 
 **Ответственность:**
-- Взаимодействие с StashApp GraphQL API
-- Получение случайных изображений с фильтрацией
-- Скачивание изображений (thumbnail/preview)
-- Обновление рейтингов
-- Обработка ошибок API
+- Фасад для взаимодействия с StashApp GraphQL API
+- Делегирование работы специализированным сервисам
+- Обратная совместимость API
+
+**Архитектура:**
+```python
+class StashClient:
+    """Фасад для взаимодействия с StashApp GraphQL API."""
+
+    def __init__(self, ...):
+        # Создаем базовый клиент
+        self._client = StashGraphQLClient(...)
+
+        # Создаем сервисы
+        self._image_service = ImageService(...)
+        self._gallery_service = GalleryService(...)
+        self._rating_service = RatingService(...)
+
+    # Делегирование методов
+    async def get_random_image() -> StashImage:
+        return await self._image_service.get_random_image()
+
+    async def get_random_image_weighted() -> StashImage:
+        return await self._image_service.get_random_image_weighted()
+```
 
 **Основные классы:**
 
@@ -298,12 +345,46 @@ class StashImage:
     performers: List[Dict[str, str]]
 
 class StashClient:
-    async def get_random_image()           # Базовый запрос
-    async def get_random_image_weighted()  # С учетом предпочтений
-    async def download_image()             # Скачивание
-    async def update_image_rating()        # Обновление рейтинга фото
-    async def update_gallery_rating()      # Обновление рейтинга галереи
+    async def get_random_image()           # Делегирует ImageService
+    async def get_random_image_weighted()  # Делегирует ImageService
+    async def download_image()             # Делегирует StashGraphQLClient
+    async def update_image_rating()       # Делегирует RatingService
+    async def update_gallery_rating()      # Делегирует RatingService
 ```
+
+#### 4.1. `bot/stash/` - Сервисы StashApp API
+
+**Структура модуля:**
+- `stash/client.py` - `StashGraphQLClient` - базовый GraphQL клиент
+- `stash/image_service.py` - `ImageService` - операции с изображениями
+- `stash/gallery_service.py` - `GalleryService` - операции с галереями
+- `stash/rating_service.py` - `RatingService` - операции с рейтингами
+- `stash/selection.py` - `select_gallery_by_weight()` - взвешенный выбор галереи
+- `stash/metrics.py` - `CategoryMetrics` - метрики распределения категорий
+- `stash/models.py` - `StashImage` - модель данных
+
+**StashGraphQLClient:**
+- Выполнение GraphQL запросов
+- Управление HTTP сессией (aiohttp)
+- Retry логика (до 5 попыток)
+- Timeout: 30s total, 10s connect
+- Поддержка API ключей и Basic Auth
+
+**ImageService:**
+- `get_random_image()` - базовый запрос случайного изображения
+- `get_random_image_weighted()` - с учетом предпочтений (blacklist/whitelist)
+- `get_random_image_from_gallery()` - из конкретной галереи
+- `get_random_image_from_gallery_weighted()` - с приоритетом по рейтингу
+- `get_image_by_id()` - получение по ID
+
+**GalleryService:**
+- `get_all_galleries()` - получение всех галерей
+- `get_all_galleries_cached()` - с кэшированием (TTL 1 час)
+- `get_gallery_image_count()` - количество изображений в галерее
+
+**RatingService:**
+- `update_image_rating()` - обновление рейтинга изображения
+- `update_gallery_rating()` - обновление рейтинга галереи
 
 **GraphQL запрос (упрощенный):**
 
@@ -334,15 +415,67 @@ query FindRandomImages($excludeIds: [ID!]) {
 - Кэширование списка всех галерей (TTL 1 час)
 - Метод `get_all_galleries_cached()` для получения всех галерей из StashApp
 
-#### 5. `bot/telegram_handler.py` - Обработчики команд
+#### 5. `bot/telegram_handler.py` - Фасад для обработчиков команд
 
 **Ответственность:**
-- Обработка команд пользователей
-- Авторизация по whitelist
-- Форматирование сообщений
-- Отправка фото с кнопками голосования
-- Обработка callback от кнопок
-- Предзагрузка следующего изображения (оптимизация)
+- Фасад для обработки команд Telegram бота
+- Делегирование работы специализированным обработчикам
+- Управление жизненным циклом обработчиков
+- Настройка handlers для Telegram Application
+
+**Архитектура:**
+```python
+class TelegramHandler:
+    """Фасад для обработки команд Telegram бота."""
+
+    def __init__(self, ...):
+        # Создаем обработчики
+        self.command_handler = CommandHandler(...)
+        self.photo_sender = PhotoSender(...)
+        self.vote_handler = VoteHandler(...)
+        self.image_selector = ImageSelector(...)
+        self.caption_formatter = CaptionFormatter(...)
+
+    async def random_command(self, update, context):
+        # Делегирует PhotoSender
+        await self.photo_sender.send_random_photo(...)
+```
+
+#### 5.1. `bot/handlers/` - Специализированные обработчики
+
+**Структура модуля:**
+- `handlers/command_handler.py` - `CommandHandler` - обработка команд (`/start`, `/help`, `/stats`, `/preferences`)
+- `handlers/photo_sender.py` - `PhotoSender` - отправка фото, кэширование file_id, предзагрузка
+- `handlers/vote_handler.py` - `VoteHandler` - обработка callback от кнопок голосования
+- `handlers/image_selector.py` - `ImageSelector` - выбор изображений, работа с галереями
+- `handlers/caption_formatter.py` - `CaptionFormatter` - форматирование подписей к фото
+
+**CommandHandler:**
+- `start_command()` - приветствие и инструкции
+- `help_command()` - справка по командам
+- `stats_command()` - статистика отправленных фото
+- `preferences_command()` - предпочтения пользователя
+- `handle_text_message()` - обработка кнопки "💕 Random"
+
+**PhotoSender:**
+- `send_random_photo()` - отправка случайного фото
+- Кэширование file_id (thumbnail и high quality)
+- Предзагрузка следующего изображения
+- Форматирование и отправка в Telegram
+
+**VoteHandler:**
+- `handle_vote_callback()` - обработка голосования 👍/👎
+- Обновление UI кнопок
+- Автоматическая отправка следующего фото после голосования
+
+**ImageSelector:**
+- Выбор галереи (взвешенный выбор)
+- Получение случайного изображения из галереи
+- Работа с весами и статистикой галерей
+
+**CaptionFormatter:**
+- Форматирование подписей с информацией о галерее
+- Прогресс-бары и статистика
 
 **Команды:**
 
@@ -357,24 +490,29 @@ query FindRandomImages($excludeIds: [ID!]) {
 **Поток обработки `/random`:**
 
 ```
-Команда → Проверка авторизации → 
-→ Есть предзагруженное фото? → ДА → Отправить мгновенно
-                             → НЕТ → Получить недавние ID из БД →
-→ Получить веса галерей (с кэшированием) →
-→ Взвешенный выбор галереи (select_gallery_by_weight) →
-→ Получить случайное изображение из выбранной галереи →
-→ Автоматически создать галерею в БД, если её нет (вес=1.0) →
-→ Скачивание thumbnail → Форматирование подписи →
-→ Отправка в Telegram с кнопками 👍👎 →
-→ Сохранение в БД → Запуск фоновой предзагрузки следующего фото
+Команда → TelegramHandler.random_command() →
+→ CommandHandler (проверка авторизации) →
+→ PhotoSender.send_random_photo() →
+  → Есть предзагруженное фото? → ДА → Отправить мгновенно
+                                → НЕТ → ImageSelector.select_image() →
+    → Получить недавние ID из БД →
+    → Получить веса галерей (VotingManager, с кэшированием) →
+    → Взвешенный выбор галереи (stash/selection.py) →
+    → Получить случайное изображение (ImageService) →
+    → Автоматически создать галерею в БД, если её нет (вес=1.0) →
+  → CaptionFormatter (форматирование подписи) →
+  → Скачивание thumbnail (StashGraphQLClient) →
+  → Отправка в Telegram с кнопками 👍👎 →
+  → Сохранение в БД → Запуск фоновой предзагрузки следующего фото
 ```
 
-**Предзагрузка изображений:**
+**Предзагрузка изображений (PhotoSender):**
 - Следующее фото загружается в фоновом режиме после отправки
 - Последующие запросы `/random` используют кэш (~1 сек вместо 8-13 сек)
 - Автоматическая валидация актуальности кэша
+- Реализовано в `handlers/photo_sender.py`
 
-**Кэширование file_id:**
+**Кэширование file_id (PhotoSender):**
 - Сохранение `file_id` и `file_id_high_quality` в БД для ускорения отправки
 - Предзагрузка изображений в служебный канал (если `cache_channel_id` настроен)
 - Фоновая задача предзагрузки: каждую минуту загружает 2 изображения high quality
@@ -423,10 +561,10 @@ class VotingManager:
     # 3. Обновление предпочтений перформеров
     # 4. Обновление предпочтений галереи
     # 5. Автоустановка рейтинга галереи после 5+ голосов
-    
+
     def get_preferences_summary()
     # Топ-5 любимых/нелюбимых перформеров и галерей
-    
+
     def get_filtering_lists()
     # Списки для фильтрации (с кэшированием)
 ```
@@ -456,44 +594,56 @@ timer.report()  # Вывод отчета
 ```mermaid
 sequenceDiagram
     participant User
-    participant Handler
+    participant TelegramHandler
+    participant CommandHandler
+    participant PhotoSender
+    participant ImageSelector
     participant Database
     participant Voting
     participant StashClient
+    participant ImageService
     participant StashApp
     participant TelegramAPI
 
-    User->>Handler: /random
-    Handler->>Handler: Check authorization
-    Handler->>Database: get_recent_image_ids(30)
-    Database-->>Handler: [recent IDs]
-    Handler->>Voting: get_filtering_lists()
+    User->>TelegramHandler: /random
+    TelegramHandler->>CommandHandler: Check authorization
+    TelegramHandler->>PhotoSender: send_random_photo()
+    PhotoSender->>ImageSelector: select_image()
+    ImageSelector->>Database: get_recent_image_ids(30)
+    Database-->>ImageSelector: [recent IDs]
+    ImageSelector->>Voting: get_filtering_lists()
     Voting->>Database: get blacklist/whitelist
     Database-->>Voting: lists
-    Voting-->>Handler: filtering_lists
-    Handler->>StashClient: get_random_image_weighted()
-    StashClient->>StashApp: GraphQL query
-    StashApp-->>StashClient: random image data
+    Voting-->>ImageSelector: filtering_lists
+    ImageSelector->>StashClient: get_random_image_weighted()
+    StashClient->>ImageService: get_random_image_weighted()
+    ImageService->>StashApp: GraphQL query
+    StashApp-->>ImageService: random image data
+    ImageService-->>StashClient: StashImage
+    StashClient-->>ImageSelector: StashImage
+    ImageSelector-->>PhotoSender: StashImage
+    PhotoSender->>StashClient: download_image(thumbnail)
     StashClient->>StashApp: download thumbnail
     StashApp-->>StashClient: image bytes
-    StashClient-->>Handler: StashImage + bytes
-    Handler->>TelegramAPI: send_photo with 👍👎 buttons
+    StashClient-->>PhotoSender: image bytes
+    PhotoSender->>TelegramAPI: send_photo with 👍👎 buttons
     TelegramAPI-->>User: photo with buttons
-    Handler->>Database: add_sent_photo()
-    Handler->>Handler: start prefetch next image (background)
-    
+    PhotoSender->>Database: add_sent_photo()
+    PhotoSender->>PhotoSender: start prefetch next image (background)
+
     Note over User,TelegramAPI: User votes
-    User->>Handler: Click 👍 or 👎
-    Handler->>Voting: process_vote(image, vote, user_id)
+    User->>TelegramHandler: Click 👍 or 👎
+    TelegramHandler->>VoteHandler: handle_vote_callback()
+    VoteHandler->>Voting: process_vote(image, vote, user_id)
     Voting->>StashClient: update_image_rating(5 or 1)
     StashClient->>StashApp: GraphQL mutation
     Voting->>Database: add_vote()
     Voting->>Database: update_performer_preference()
     Voting->>Database: update_gallery_preference()
     Voting->>StashClient: update_gallery_rating (if threshold)
-    Voting-->>Handler: result
-    Handler->>TelegramAPI: update button (add ✓)
-    Handler->>TelegramAPI: send result message
+    Voting-->>VoteHandler: result
+    VoteHandler->>TelegramAPI: update button (add ✓)
+    VoteHandler->>TelegramAPI: send result message
 ```
 
 ### Асинхронная архитектура
@@ -592,7 +742,7 @@ if image.gallery_id:
         gallery_title=image.gallery_title,
         vote=vote
     )
-    
+
     # Обновление веса галереи (×1.2 для 👍, ×0.8 для 👎)
     database.update_gallery_weight(
         gallery_id=image.gallery_id,
@@ -872,7 +1022,7 @@ per_page: 20
 #### 3. Использование thumbnail вместо preview
 
 ```python
-# bot/stash_client.py
+# bot/stash/models.py
 class StashImage:
     def get_image_url(self, use_high_quality: bool = False) -> str:
         if use_high_quality:
@@ -881,7 +1031,7 @@ class StashImage:
             return self._thumbnail_url or self._preview_url or self._image_url
 ```
 
-**Эффект:** 
+**Эффект:**
 - Размер файла: ~15-30 KB вместо ~50-100 KB
 - Скорость загрузки: 3-5x быстрее
 - Скорость отправки в Telegram: 3-5x быстрее
@@ -901,15 +1051,15 @@ class StashImage:
 #### 4. Предзагрузка следующего изображения
 
 ```python
-# bot/telegram_handler.py
-async def _send_random_photo(self, ...):
+# bot/handlers/photo_sender.py
+async def send_random_photo(self, ...):
     # Используем предзагруженное, если есть
     if self._prefetched_image:
         if prefetched_image.id not in recent_ids:
             logger.info("⚡ Используется предзагруженное изображение")
             image = prefetched_image
             # ... мгновенная отправка ...
-    
+
     # После отправки - запускаем предзагрузку следующего
     asyncio.create_task(self._prefetch_next_image())
 ```
@@ -1124,8 +1274,24 @@ stash-telegram-bot/
 │   │   ├── preferences.py       # Репозиторий предпочтений
 │   │   ├── weights.py           # Репозиторий весов галерей
 │   │   └── statistics.py        # Репозиторий статистики
-│   ├── stash_client.py          # GraphQL клиент StashApp
-│   ├── telegram_handler.py      # Обработчики Telegram команд
+│   ├── handlers/                # Обработчики Telegram команд
+│   │   ├── __init__.py
+│   │   ├── command_handler.py   # Обработка команд
+│   │   ├── photo_sender.py      # Отправка фото
+│   │   ├── vote_handler.py      # Обработка голосования
+│   │   ├── image_selector.py    # Выбор изображений
+│   │   └── caption_formatter.py # Форматирование подписей
+│   ├── stash/                    # Сервисы StashApp API
+│   │   ├── __init__.py
+│   │   ├── client.py            # GraphQL клиент
+│   │   ├── image_service.py     # Операции с изображениями
+│   │   ├── gallery_service.py   # Операции с галереями
+│   │   ├── rating_service.py    # Операции с рейтингами
+│   │   ├── selection.py          # Взвешенный выбор галереи
+│   │   ├── metrics.py            # Метрики категорий
+│   │   └── models.py             # Модели данных
+│   ├── stash_client.py          # Фасад для StashApp API
+│   ├── telegram_handler.py      # Фасад для Telegram команд
 │   ├── scheduler.py             # Планировщик отправки
 │   ├── voting.py                # Менеджер голосования
 │   └── performance.py           # Утилиты профилирования
@@ -1161,8 +1327,10 @@ stash-telegram-bot/
 | `main.py` | Инициализация, запуск, graceful shutdown |
 | `config.py` | Загрузка и валидация конфигурации |
 | `database/` | Модульная структура БД с репозиториями |
-| `stash_client.py` | GraphQL API, загрузка изображений, кэширование галерей |
-| `telegram_handler.py` | Команды, отправка фото, callback, кэширование file_id |
+| `telegram_handler.py` | **Фасад** для обработчиков Telegram команд |
+| `handlers/` | Специализированные обработчики команд, отправки фото, голосования |
+| `stash_client.py` | **Фасад** для StashApp API |
+| `stash/` | Сервисы для работы с StashApp (GraphQL, изображения, галереи, рейтинги) |
 | `scheduler.py` | Автоматическая отправка по cron, фоновые задачи |
 | `voting.py` | Голосование, предпочтения, фильтрация |
 | `performance.py` | Профилирование и метрики |
@@ -1199,25 +1367,59 @@ class Database:
     def get_gallery_statistics()
     # ... + множество других методов
 
-# bot/stash_client.py
+# bot/stash_client.py (Фасад)
 @dataclass class StashImage
 class StashClient:
-    async def get_random_image()
-    async def get_random_image_weighted()
-    async def download_image()
-    async def update_image_rating()
+    # Делегирует методы сервисам:
+    async def get_random_image()  # → ImageService
+    async def get_random_image_weighted()  # → ImageService
+    async def download_image()  # → StashGraphQLClient
+    async def update_image_rating()  # → RatingService
     # ... + 5+ методов
 
-# bot/telegram_handler.py
+# bot/stash/ (Сервисы)
+class StashGraphQLClient:  # client.py
+    async def execute_query()
+    async def download_image()
+
+class ImageService:  # image_service.py
+    async def get_random_image()
+    async def get_random_image_weighted()
+
+class GalleryService:  # gallery_service.py
+    async def get_all_galleries()
+    async def get_all_galleries_cached()
+
+class RatingService:  # rating_service.py
+    async def update_image_rating()
+    async def update_gallery_rating()
+
+# bot/telegram_handler.py (Фасад)
 class TelegramHandler:
+    # Делегирует методы обработчикам:
+    async def start_command()  # → CommandHandler
+    async def random_command()  # → PhotoSender
+    async def stats_command()  # → CommandHandler
+    async def preferences_command()  # → CommandHandler
+    async def handle_vote_callback()  # → VoteHandler
+    def setup_handlers()  # Регистрация handlers
+
+# bot/handlers/ (Обработчики)
+class CommandHandler:  # command_handler.py
     async def start_command()
-    async def random_command()
+    async def help_command()
     async def stats_command()
     async def preferences_command()
+
+class PhotoSender:  # photo_sender.py
+    async def send_random_photo()
+    # Кэширование file_id, предзагрузка
+
+class VoteHandler:  # vote_handler.py
     async def handle_vote_callback()
-    async def _send_random_photo()
-    async def _prefetch_next_image()
-    # ... + 5+ методов
+
+class ImageSelector:  # image_selector.py
+    async def select_image()
 
 # bot/scheduler.py
 class PhotoScheduler:
@@ -1297,11 +1499,16 @@ python-dotenv==1.0.0      # .env поддержка
 
 ## Версия документа
 
-**Версия:** 1.0.0  
-**Дата:** 2026-01-30  
+**Версия:** 1.2.0
+**Дата:** 2026-01-30
 **Автор:** Консолидация из ARCHITECTURE.md, VOTING_SYSTEM.md, PERFORMANCE_ANALYSIS.md
 
 **Статус:** ✅ Production Ready
+
+**Изменения в версии 1.2.0:**
+- Рефакторинг архитектуры: введены фасады (`telegram_handler.py`, `stash_client.py`)
+- Модульная структура: выделены специализированные обработчики (`handlers/`) и сервисы (`stash/`)
+- Улучшена разделяемость ответственности и тестируемость кода
 
 ---
 
