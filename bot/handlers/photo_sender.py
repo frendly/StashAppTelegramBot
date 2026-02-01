@@ -143,16 +143,27 @@ class PhotoSender:
                 prefetched_image = self._prefetched_image["image"]
 
                 if prefetched_image.id not in recent_ids:
-                    logger.info("⚡ Используется предзагруженное изображение")
-                    image = prefetched_image
-                    image_data = self._prefetched_image["image_data"]
-                    self._prefetched_image = None  # Очистка кэша
-                    used_prefetch = True
-                    # Проверяем наличие file_id в кеше для предзагруженного изображения
-                    cached_file_id = self.database.get_file_id(
-                        image.id, use_high_quality=True
+                    # ТЕСТ: Проверяем, что изображение есть в кеше БД
+                    cached_file_id_check = self.database.get_file_id(
+                        prefetched_image.id, use_high_quality=True
                     )
-                    timer.checkpoint("Use prefetched image")
+                    if cached_file_id_check:
+                        logger.info("⚡ Используется предзагруженное изображение")
+                        image = prefetched_image
+                        image_data = self._prefetched_image["image_data"]
+                        self._prefetched_image = None  # Очистка кэша
+                        used_prefetch = True
+                        # Проверяем наличие file_id в кеше для предзагруженного изображения
+                        cached_file_id = self.database.get_file_id(
+                            image.id, use_high_quality=True
+                        )
+                        timer.checkpoint("Use prefetched image")
+                    else:
+                        logger.info(
+                            "⚠️ Предзагруженное изображение не в кеше, пропускаем"
+                        )
+                        self._prefetched_image = None  # Очистка устаревшего кэша
+                        timer.checkpoint("Clear stale cache")
                 else:
                     logger.info(
                         "⚠️ Предзагруженное изображение устарело, загружаем новое"
@@ -195,76 +206,17 @@ class PhotoSender:
                         )
                         image = None
 
-                # Fallback на StashApp (если кеш пуст или не подходит)
+                # ТЕСТ: Используем только кеш, без fallback на StashApp
                 if not image:
-                    if cached_image_id:
-                        logger.info(
-                            "⚠️ Все изображения в кеше недавно отправлялись, выбираем из StashApp"
-                        )
-                    else:
-                        logger.info("⚠️ Кеш пуст, выбираем из StashApp")
-
-                    # Получение списка фильтров для метрик
-                    if self.voting_manager:
-                        timer.checkpoint("Get filtering lists from DB")
-
-                    # Получение случайного изображения с учетом предпочтений
-                    image = await self.image_selector.get_random_image(recent_ids)
-                    timer.checkpoint("Get random image")
-
-                    if not image:
-                        logger.error("Не удалось получить случайное изображение")
-                        if context:
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ Не удалось получить изображение из StashApp. Попробуйте позже.",
-                            )
-                        return False
-
-                    # Автоматически добавляем галерею в базу, если её там еще нет
-                    # Это нужно для того, чтобы все галереи участвовали во взвешенном выборе
-                    if image.gallery_id and image.gallery_title:
-                        try:
-                            gallery_created = self.database.ensure_gallery_exists(
-                                image.gallery_id, image.gallery_title
-                            )
-                            if gallery_created:
-                                # Инвалидируем кэш весов, если галерея была создана
-                                if self.voting_manager:
-                                    self.voting_manager.invalidate_weights_cache()
-                                logger.debug(
-                                    f"Галерея '{image.gallery_title}' добавлена в базу с весом 1.0"
-                                )
-                        except Exception as e:
-                            logger.warning(
-                                f"Ошибка при инициализации галереи {image.gallery_id}: {e}"
-                            )
-
-                    # Проверка наличия file_id в кеше для выбранного изображения
-                    cached_file_id = self.database.get_file_id(
-                        image.id, use_high_quality=True
+                    logger.warning(
+                        "⚠️ Кеш пуст или все изображения недавно отправлялись"
                     )
-
-                    if cached_file_id:
-                        logger.info(
-                            f"⚡ Используется кешированный file_id_high_quality для image_id={image.id}"
+                    if context:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="⏳ Кеш пуст. Подождите, пока изображения будут предзагружены в служебный канал.",
                         )
-                        image_data = None  # Не нужно скачивать файл
-                        timer.checkpoint("Get cached file_id")
-                    else:
-                        # Скачивание изображения в thumbnail качестве (если нет в кеше)
-                        image_url = image.get_image_url(use_high_quality=False)
-                        image_data = await self.stash_client.download_image(image_url)
-                        timer.checkpoint("Download image (thumbnail)")
-
-                        if not image_data:
-                            logger.error(f"Не удалось скачать изображение {image.id}")
-                            if context:
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="❌ Не удалось скачать изображение. Попробуйте позже.",
-                                )
-                            return False
+                    return False
 
             # Определяем, было ли изображение предзагружено из служебного канала
             # cached_file_id уже установлен в нужных местах выше, но проверяем еще раз для надежности
