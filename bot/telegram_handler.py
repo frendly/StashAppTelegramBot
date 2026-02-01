@@ -123,6 +123,8 @@ class TelegramHandler:
                     image_data = self._prefetched_image['image_data']
                     self._prefetched_image = None  # Очистка кэша
                     used_prefetch = True
+                    # Проверяем наличие file_id в кеше для предзагруженного изображения
+                    cached_file_id = self.database.get_file_id(image.id, use_high_quality=True)
                     timer.checkpoint("Use prefetched image")
                 else:
                     logger.info("⚠️ Предзагруженное изображение устарело, загружаем новое")
@@ -192,6 +194,12 @@ class TelegramHandler:
                             )
                         return False
             
+            # Определяем, было ли изображение предзагружено из служебного канала
+            # Проверяем cached_file_id (если он был определен ранее) или проверяем заново
+            if cached_file_id is None:
+                cached_file_id = self.database.get_file_id(image.id, use_high_quality=True)
+            is_preloaded_from_cache = cached_file_id is not None
+            
             # Проверка достижения порога и формирование подписи
             should_show_threshold = False
             if image.gallery_id:
@@ -201,15 +209,15 @@ class TelegramHandler:
                 # Используем формат с порогом
                 gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
                 if gallery_stats:
-                    caption = self._format_threshold_caption(image, gallery_stats)
+                    caption = self._format_threshold_caption(image, gallery_stats, is_preloaded_from_cache)
                     # Отмечаем уведомление как показанное
                     self.database.mark_threshold_notification_shown(image.gallery_id)
                 else:
                     # Fallback на обычный формат, если статистики нет
-                    caption = self._format_caption(image)
+                    caption = self._format_caption(image, is_preloaded_from_cache)
             else:
                 # Обычный формат
-                caption = self._format_caption(image)
+                caption = self._format_caption(image, is_preloaded_from_cache)
             
             # Создание кнопок для голосования
             keyboard = [
@@ -567,26 +575,37 @@ class TelegramHandler:
         # Форматирование: [██████░░░░] 60% (12/20)
         return f"{color_emoji} {progress_bar} {negative_percentage:.0f}% ({negative_votes}/{total_images})"
     
-    def _format_caption(self, image: StashImage) -> str:
+    def _format_caption(self, image: StashImage, is_preloaded_from_cache: bool = False) -> str:
         """
         Форматирование подписи к изображению согласно MVP.
         
         Формат обычного сообщения:
+        👤 Перформер: Имя1, Имя2
         📊 Галерея: "Название_галереи"
         Вес: 2.4 | ⭐⭐⭐☆☆ (3.2/5.0)
         Прогресс: [██████░░░░] 60% (12/20)
+        ⚡ Предзагружено (если предзагружено)
         
         Args:
             image: Объект изображения
+            is_preloaded_from_cache: Флаг предзагрузки из служебного канала
             
         Returns:
             str: Отформатированная подпись
         """
+        # Формируем информацию о перформере
+        performer_names = [p['name'] for p in image.performers] if image.performers else []
+        performer_text = ", ".join(performer_names) if performer_names else "не указан"
+        
         # Если нет галереи, используем упрощенный формат
         if not image.gallery_id or not image.gallery_title:
             caption_parts = []
+            caption_parts.append(f"👤 Перформер: {performer_text}")
+            caption_parts.append(f"📊 Галерея: не указан")
             if image.title and image.title != 'Без названия':
                 caption_parts.append(f"<b>{image.title}</b>")
+            if is_preloaded_from_cache:
+                caption_parts.append("⚡ Предзагружено")
             return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
         
         try:
@@ -596,13 +615,19 @@ class TelegramHandler:
             # Если статистики нет, используем упрощенный формат
             if not gallery_stats or gallery_stats.get('total_images', 0) == 0:
                 caption_parts = []
+                caption_parts.append(f"👤 Перформер: {performer_text}")
+                caption_parts.append(f"📊 Галерея: \"{image.gallery_title}\"")
                 if image.title and image.title != 'Без названия':
                     caption_parts.append(f"<b>{image.title}</b>")
-                caption_parts.append(f"📊 Галерея: \"{image.gallery_title}\"")
+                if is_preloaded_from_cache:
+                    caption_parts.append("⚡ Предзагружено")
                 return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
             
             # Формируем новый формат согласно MVP
             caption_parts = []
+            
+            # Перформер
+            caption_parts.append(f"👤 Перформер: {performer_text}")
             
             # Галерея
             caption_parts.append(f"📊 Галерея: \"{image.gallery_title}\"")
@@ -633,23 +658,33 @@ class TelegramHandler:
             if progress_bar:
                 caption_parts.append(f"Прогресс: {progress_bar}")
             
+            # Пометка о предзагрузке
+            if is_preloaded_from_cache:
+                caption_parts.append("⚡ Предзагружено")
+            
             return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
             
         except Exception as e:
             logger.warning(f"Ошибка при форматировании подписи для галереи {image.gallery_id}: {e}")
             # Fallback на упрощенный формат
             caption_parts = []
-            if image.title and image.title != 'Без названия':
-                caption_parts.append(f"<b>{image.title}</b>")
+            caption_parts.append(f"👤 Перформер: {performer_text}")
             if image.gallery_title:
                 caption_parts.append(f"📊 Галерея: \"{image.gallery_title}\"")
+            else:
+                caption_parts.append(f"📊 Галерея: не указан")
+            if image.title and image.title != 'Без названия':
+                caption_parts.append(f"<b>{image.title}</b>")
+            if is_preloaded_from_cache:
+                caption_parts.append("⚡ Предзагружено")
             return "\n".join(caption_parts) if caption_parts else "📸 Случайное фото"
     
-    def _format_threshold_caption(self, image: StashImage, gallery_stats: Dict[str, Any]) -> str:
+    def _format_threshold_caption(self, image: StashImage, gallery_stats: Dict[str, Any], is_preloaded_from_cache: bool = False) -> str:
         """
         Форматирование подписи при достижении порога 33.3%.
         
         Формат согласно MVP:
+        👤 Перформер: Имя1, Имя2
         Галерея: "Название_галереи"
         Прогресс: [██████░░░░] 60% (12/20)
         
@@ -657,19 +692,30 @@ class TelegramHandler:
         • Получили "+": 5
         • Получили "-": 12 (60%)
         • Без оценки: 3
+        ⚡ Предзагружено (если предзагружено)
         
         Args:
             image: Объект изображения
             gallery_stats: Статистика галереи
+            is_preloaded_from_cache: Флаг предзагрузки из служебного канала
             
         Returns:
             str: Отформатированная подпись
         """
         caption_parts = []
         
+        # Формируем информацию о перформере
+        performer_names = [p['name'] for p in image.performers] if image.performers else []
+        performer_text = ", ".join(performer_names) if performer_names else "не указан"
+        
+        # Перформер
+        caption_parts.append(f"👤 Перформер: {performer_text}")
+        
         # Галерея
         if image.gallery_title:
-            caption_parts.append(f"Галерея: \"{image.gallery_title}\"")
+            caption_parts.append(f"📊 Галерея: \"{image.gallery_title}\"")
+        else:
+            caption_parts.append(f"📊 Галерея: не указан")
         
         # Прогресс-бар
         total_images = gallery_stats.get('total_images', 0)
@@ -701,6 +747,10 @@ class TelegramHandler:
         caption_parts.append(f"• Получили \"+\": {positive_votes}")
         caption_parts.append(f"• Получили \"-\": {negative_votes} ({negative_percentage:.0f}%)")
         caption_parts.append(f"• Без оценки: {unrated_count}")
+        
+        # Пометка о предзагрузке
+        if is_preloaded_from_cache:
+            caption_parts.append("⚡ Предзагружено")
         
         return "\n".join(caption_parts)
     
@@ -1194,8 +1244,11 @@ class TelegramHandler:
                 # Получаем обновленную статистику
                 gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
                 if gallery_stats:
+                    # Проверяем, было ли изображение предзагружено из служебного канала
+                    cached_file_id = self.database.get_file_id(image.id, use_high_quality=True)
+                    is_preloaded_from_cache = cached_file_id is not None
                     # Формируем новую подпись с порогом
-                    new_caption = self._format_threshold_caption(image, gallery_stats)
+                    new_caption = self._format_threshold_caption(image, gallery_stats, is_preloaded_from_cache)
                     
                     # Добавляем кнопку исключения
                     exclude_button_text = f"🚫 Исключить \"{image.gallery_title}\""
