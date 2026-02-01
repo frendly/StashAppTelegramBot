@@ -201,7 +201,7 @@ class SentPhotosRepository:
                     SELECT file_id_high_quality 
                     FROM sent_photos 
                     WHERE image_id = ? AND file_id_high_quality IS NOT NULL
-                    ORDER BY COALESCE(sent_at, '1970-01-01') DESC, id DESC
+                    ORDER BY sent_at IS NULL, sent_at DESC, id DESC
                     LIMIT 1
                 """
             else:
@@ -209,7 +209,7 @@ class SentPhotosRepository:
                     SELECT file_id 
                     FROM sent_photos 
                     WHERE image_id = ? AND file_id IS NOT NULL
-                    ORDER BY COALESCE(sent_at, '1970-01-01') DESC, id DESC
+                    ORDER BY sent_at IS NULL, sent_at DESC, id DESC
                     LIMIT 1
                 """
             

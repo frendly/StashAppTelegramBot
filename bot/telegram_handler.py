@@ -195,11 +195,11 @@ class TelegramHandler:
                         return False
             
             # Определяем, было ли изображение предзагружено из служебного канала
-            # Проверяем cached_file_id (если он был определен ранее) или проверяем заново
+            # cached_file_id уже определен выше (строка 127 или 176), если нет - проверяем заново
             if cached_file_id is None:
                 cached_file_id = self.database.get_file_id(image.id, use_high_quality=True)
             is_preloaded_from_cache = cached_file_id is not None
-            logger.debug(f"Image {image.id}: cached_file_id={cached_file_id}, is_preloaded_from_cache={is_preloaded_from_cache}")
+            logger.info(f"Image {image.id}: cached_file_id={'YES' if cached_file_id else 'NO'}, is_preloaded_from_cache={is_preloaded_from_cache}")
             
             # Проверка достижения порога и формирование подписи
             should_show_threshold = False
@@ -354,14 +354,19 @@ class TelegramHandler:
             
             # Определяем file_id_high_quality для сохранения в add_sent_photo
             # Делаем это после получения file_id_to_save из ответа Telegram
+            # cached_file_id уже определен выше, используем его значение
             file_id_high_quality_to_save = None
+            
             if use_high_quality:
                 # Для высокого качества: используем cached_file_id если есть, иначе file_id_to_save
                 file_id_high_quality_to_save = cached_file_id if cached_file_id else file_id_to_save
             else:
-                # Для ручных запросов: если использовали cached_file_id (это file_id_high_quality), сохраняем его
+                # Для ручных запросов: если есть cached_file_id (это file_id_high_quality), сохраняем его
+                # cached_file_id уже определен выше (строка 127 или 176), используем его
                 if cached_file_id:
                     file_id_high_quality_to_save = cached_file_id
+            
+            logger.info(f"Image {image.id}: file_id_high_quality_to_save={'YES' if file_id_high_quality_to_save else 'NO'}, cached_file_id={'YES' if cached_file_id else 'NO'}")
             
             # Сохранение в базу данных
             self.database.add_sent_photo(
