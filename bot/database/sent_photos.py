@@ -304,10 +304,10 @@ class SentPhotosRepository:
         """
         Получение случайного ID изображения с кешем (file_id_high_quality).
 
-        Использует SQL для случайного выбора, что эффективнее чем загрузка всех ID.
+        Упрощенная версия: просто берет случайное изображение из кеша без исключений.
 
         Args:
-            exclude_ids: Список ID изображений для исключения
+            exclude_ids: Игнорируется (для обратной совместимости)
 
         Returns:
             Optional[str]: Случайный ID изображения с кешем или None
@@ -315,34 +315,36 @@ class SentPhotosRepository:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
-            if exclude_ids and len(exclude_ids) > 0:
-                # Исключаем указанные ID
-                placeholders = ",".join(["?"] * len(exclude_ids))
-                query = f"""
-                    SELECT DISTINCT image_id
-                    FROM sent_photos
-                    WHERE file_id_high_quality IS NOT NULL
-                    AND image_id NOT IN ({placeholders})
-                    ORDER BY RANDOM()
-                    LIMIT 1
+            # Диагностика: считаем общее количество записей с file_id_high_quality
+            cursor.execute(
                 """
-                cursor.execute(query, exclude_ids)
-            else:
-                query = """
-                    SELECT DISTINCT image_id
-                    FROM sent_photos
-                    WHERE file_id_high_quality IS NOT NULL
-                    ORDER BY RANDOM()
-                    LIMIT 1
-                """
-                cursor.execute(query)
+                SELECT COUNT(DISTINCT image_id)
+                FROM sent_photos
+                WHERE file_id_high_quality IS NOT NULL
+            """
+            )
+            total_cached = cursor.fetchone()[0]
+
+            # Упрощенная логика: просто берем случайное изображение из кеша
+            query = """
+                SELECT DISTINCT image_id
+                FROM sent_photos
+                WHERE file_id_high_quality IS NOT NULL
+                ORDER BY RANDOM()
+                LIMIT 1
+            """
+            cursor.execute(query)
 
             result = cursor.fetchone()
             image_id = result[0] if result else None
 
             if image_id:
-                logger.debug(f"Найдено изображение в кеше: {image_id}")
+                logger.info(
+                    f"✅ Найдено изображение в кеше: {image_id} (всего в кеше: {total_cached})"
+                )
             else:
-                logger.debug("Кеш пуст или все изображения исключены")
+                logger.warning(
+                    f"⚠️ Кеш пуст (всего записей с file_id_high_quality: {total_cached})"
+                )
 
             return image_id

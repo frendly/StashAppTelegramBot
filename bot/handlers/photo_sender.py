@@ -124,12 +124,6 @@ class PhotoSender:
         timer.start()
 
         try:
-            # Получение списка недавно отправленных ID (один раз в начале)
-            recent_ids = self.database.get_recent_image_ids(
-                self.config.history.avoid_recent_days
-            )
-            timer.checkpoint("Get recent IDs from DB")
-
             # Проверка наличия предзагруженного изображения
             image = None
             image_data = None
@@ -139,48 +133,32 @@ class PhotoSender:
             if self._prefetched_image and not use_high_quality:
                 # Предзагруженное изображение используется только для ручных команд (низкое качество)
                 # Для автоматических задач (высокое качество) всегда загружаем новое
-                # Проверяем, что предзагруженное изображение еще актуально
+                # Упрощенная проверка: просто проверяем наличие в кеше БД
                 prefetched_image = self._prefetched_image["image"]
 
-                if prefetched_image.id not in recent_ids:
-                    # ТЕСТ: Проверяем, что изображение есть в кеше БД
-                    cached_file_id_check = self.database.get_file_id(
-                        prefetched_image.id, use_high_quality=True
-                    )
-                    if cached_file_id_check:
-                        logger.info("⚡ Используется предзагруженное изображение")
-                        image = prefetched_image
-                        image_data = self._prefetched_image["image_data"]
-                        self._prefetched_image = None  # Очистка кэша
-                        used_prefetch = True
-                        # Проверяем наличие file_id в кеше для предзагруженного изображения
-                        cached_file_id = self.database.get_file_id(
-                            image.id, use_high_quality=True
-                        )
-                        timer.checkpoint("Use prefetched image")
-                    else:
-                        logger.info(
-                            "⚠️ Предзагруженное изображение не в кеше, пропускаем"
-                        )
-                        self._prefetched_image = None  # Очистка устаревшего кэша
-                        timer.checkpoint("Clear stale cache")
+                # Проверяем, что изображение есть в кеше БД
+                cached_file_id = self.database.get_file_id(
+                    prefetched_image.id, use_high_quality=True
+                )
+                if cached_file_id:
+                    logger.info("⚡ Используется предзагруженное изображение")
+                    image = prefetched_image
+                    image_data = self._prefetched_image["image_data"]
+                    self._prefetched_image = None  # Очистка кэша
+                    used_prefetch = True
+                    timer.checkpoint("Use prefetched image")
                 else:
-                    logger.info(
-                        "⚠️ Предзагруженное изображение устарело, загружаем новое"
-                    )
+                    logger.info("⚠️ Предзагруженное изображение не в кеше, пропускаем")
                     self._prefetched_image = None  # Очистка устаревшего кэша
                     timer.checkpoint("Clear stale cache")
 
-            # Если нет предзагруженного изображения, загружаем обычным способом
-            if not image or not image_data:
-                logger.info(
-                    f"Запрос случайного фото (исключая {len(recent_ids)} недавних)"
-                )
+            # Если нет изображения, загружаем из кеша
+            # Если image_data отсутствует, но есть cached_file_id - это нормально, используем file_id
+            if not image:
+                logger.info("Запрос случайного фото из кеша")
 
-                # ПРИОРИТЕТ КЕША: Сначала пытаемся найти изображение в кеше
-                cached_image_id = self.database.get_random_cached_image_id(
-                    exclude_ids=recent_ids
-                )
+                # Упрощенная логика: просто берем случайное изображение из кеша
+                cached_image_id = self.database.get_random_cached_image_id()
 
                 if cached_image_id:
                     logger.info(f"⚡ Выбрано изображение из кеша: {cached_image_id}")
@@ -196,21 +174,17 @@ class PhotoSender:
                             image_data = None  # Не нужно скачивать файл
                             timer.checkpoint("Get from cache")
                         else:
-                            logger.warning(
-                                f"⚠️ file_id не найден для {image.id}, загружаем новое"
-                            )
+                            logger.warning(f"⚠️ file_id не найден для {image.id}")
                             image = None
                     else:
                         logger.warning(
-                            f"⚠️ Не удалось получить метаданные для {cached_image_id}, загружаем новое"
+                            f"⚠️ Не удалось получить метаданные для {cached_image_id}"
                         )
                         image = None
 
                 # ТЕСТ: Используем только кеш, без fallback на StashApp
                 if not image:
-                    logger.warning(
-                        "⚠️ Кеш пуст или все изображения недавно отправлялись"
-                    )
+                    logger.warning("⚠️ Кеш пуст или не удалось получить изображение")
                     if context:
                         await context.bot.send_message(
                             chat_id=chat_id,
