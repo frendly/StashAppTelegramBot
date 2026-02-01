@@ -306,14 +306,9 @@ class VoteHandler:
                 logger.info(
                     f"Изображение {image_id} является последним (из кэша), отправляем новое изображение"
                 )
-            elif last_image_id:
-                # Изображение не совпадает с последним в кэше - не отправляем
-                should_send_new_image = False
-                logger.info(
-                    f"Изображение {image_id} не является последним (последнее: {last_image_id}), не отправляем новое изображение"
-                )
             else:
-                # Кэш пуст, проверяем БД
+                # Кэш пуст или не совпадает - проверяем БД для надежности
+                # (кэш может быть устаревшим, поэтому всегда проверяем БД)
                 last_photo = self.database.get_last_sent_photo_for_user(user_id)
                 if last_photo:
                     last_photo_image_id = last_photo[0]

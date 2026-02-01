@@ -382,10 +382,6 @@ class PhotoSender:
 
             timer.checkpoint("Send to Telegram")
 
-            # Сохранение изображения в кэш для обработки голосования
-            if user_id:
-                self._last_sent_images[user_id] = image
-
             # Сохранение file_id в БД если еще не сохранен
             if file_id_to_save:
                 if use_high_quality:
@@ -445,6 +441,12 @@ class PhotoSender:
                 file_id_high_quality=file_id_high_quality_to_save,
             )
             timer.checkpoint("Save to database")
+
+            # Сохранение изображения в кэш для обработки голосования
+            # Обновляем кэш ПОСЛЕ успешного сохранения в БД для консистентности
+            if user_id:
+                self._last_sent_images[user_id] = image
+                self._last_sent_image_id[user_id] = image.id
 
             # Запуск фоновой предзагрузки следующего изображения
             # Только если была команда от пользователя (не планировщик)

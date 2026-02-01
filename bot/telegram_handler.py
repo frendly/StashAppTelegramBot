@@ -142,14 +142,8 @@ class TelegramHandler:
         )
 
         # Отправка случайного фото
+        # Кэш обновляется автоматически в photo_sender после сохранения в БД
         success = await self.photo_sender.send_random_photo(chat_id, user_id, context)
-
-        # Обновление кэша последнего отправленного изображения
-        if success and user_id:
-            # Получаем последнее отправленное изображение из БД для обновления кэша ID
-            last_photo = self.database.get_last_sent_photo_for_user(user_id)
-            if last_photo:
-                self._last_sent_image_id[user_id] = last_photo[0]
 
         # Удаление сообщения о загрузке
         await loading_msg.delete()
@@ -192,16 +186,10 @@ class TelegramHandler:
             )
 
             # Отправка случайного фото
+            # Кэш обновляется автоматически в photo_sender после сохранения в БД
             success = await self.photo_sender.send_random_photo(
                 chat_id, user_id, context
             )
-
-            # Обновление кэша последнего отправленного изображения
-            if success and user_id:
-                # Получаем последнее отправленное изображение из БД для обновления кэша ID
-                last_photo = self.database.get_last_sent_photo_for_user(user_id)
-                if last_photo:
-                    self._last_sent_image_id[user_id] = last_photo[0]
 
             # Удаление сообщения о загрузке
             await loading_msg.delete()
@@ -230,16 +218,15 @@ class TelegramHandler:
         logger.info(
             f"Отправка запланированного фото в chat_id={chat_id}, user_id={user_id}"
         )
+        # Отправка фото по расписанию
+        # Кэш обновляется автоматически в photo_sender после сохранения в БД
         success = await self.photo_sender.send_random_photo(
             chat_id, user_id=user_id, context=None, use_high_quality=True
         )
-
-        # Обновление кэша последнего отправленного изображения
-        if success and user_id:
-            # Получаем последнее отправленное изображение из БД для обновления кэша ID
-            last_photo = self.database.get_last_sent_photo_for_user(user_id)
-            if last_photo:
-                self._last_sent_image_id[user_id] = last_photo[0]
+        if not success:
+            logger.error(
+                f"Не удалось отправить запланированное фото в chat_id={chat_id}, user_id={user_id}"
+            )
 
     async def handle_vote_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

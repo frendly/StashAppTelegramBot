@@ -28,5 +28,6 @@
     "**/venv/**": true,
     "**/data/**": true,
     "**/logs/**": true
-  }
+  },
+  "makefile.configureOnOpen": false
 }
