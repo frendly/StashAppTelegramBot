@@ -37,7 +37,7 @@ User ──→ Telegram Bot ──→ Handler ←── Scheduler (cron)
 | `telegram_handler.py` | Telegram commands | `random_command()`, `handle_vote_callback()`, `_send_random_photo()` |
 | `voting.py` | Voting system | `process_vote()`, `get_filtering_lists()`, `get_preferences_summary()` |
 | `stash_client.py` | GraphQL client | `get_random_image_weighted()`, `download_image()`, `update_image_rating()` |
-| `database.py` | SQLite DB | `add_vote()`, `get_recent_image_ids()`, `update_performer_preference()` |
+| `database/` | SQLite DB (repositories) | `add_vote()`, `get_recent_image_ids()`, `update_performer_preference()` |
 | `scheduler.py` | Cron scheduler | `start()`, `stop()` |
 | `performance.py` | Profiling | `@timing_decorator`, `PerformanceTimer` |
 | `config.py` | Configuration | `load_config()` → `BotConfig` |
@@ -47,10 +47,12 @@ User ──→ Telegram Bot ──→ Handler ←── Scheduler (cron)
 **Command /random:**
 ```
 User → random_command() → Check auth → Get recent IDs (DB) 
-→ Get gallery weights (Voting) → Select gallery by weight (StashClient)
-→ Get random image from selected gallery → Ensure gallery exists in DB (weight=1.0)
-→ Download thumbnail → Send to Telegram with 👍👎 buttons
-→ Save to DB → Prefetch next image (background)
+→ Get all galleries from StashApp (cached) → Get gallery weights (Voting, cached)
+→ Select gallery by weight (with coverage/freshness modifiers) → Get random image from selected gallery
+→ Ensure gallery exists in DB (weight=1.0) → Check file_id cache (DB)
+→ If cached: use file_id, else: Download thumbnail → Send to Telegram with 👍👎 buttons
+→ Save file_id to DB → Save to DB → Prefetch next image (background)
+→ Check exclusion threshold → Show exclusion button if threshold reached
 ```
 
 **Voting:**
@@ -58,7 +60,9 @@ User → random_command() → Check auth → Get recent IDs (DB)
 User clicks 👍/👎 → handle_vote_callback() → process_vote() (Voting)
 → update_image_rating() (StashClient) → add_vote() (DB)
 → update_performer_preference() (DB) → update_gallery_preference() (DB)
-→ Update button UI → Send result message
+→ update_gallery_weight() (DB, k=0.2) → Invalidate weights cache
+→ Check exclusion threshold → If reached: show exclusion button
+→ Update button UI → Send result message → Auto-send next image if last
 ```
 
 ---
@@ -87,16 +91,28 @@ score = (positive_votes - negative_votes) / total_votes
 
 ### Gallery Weight System
 
-- **Weight calculation:** Starts at 1.0, multiplies by 1.2 for 👍, 0.8 for 👎
+- **Weight calculation:** Starts at 1.0, multiplies by 1.2 for 👍, 0.8 for 👎 (k=0.2)
 - **Range:** 0.1 (minimum) to 10.0 (maximum)
 - **Weighted selection:** Galleries with higher weights are more likely to be chosen
 - **Auto-creation:** Galleries are automatically added to DB with weight 1.0 when first shown
 - **Caching:** Weights cached for 60 seconds, invalidated after vote
+- **Coverage penalty:** Weight reduced by up to 50% based on viewed/total images ratio
+- **Freshness bonus:** Weight increased by up to 200% based on days since last selection
+- **All galleries:** System considers all galleries from StashApp, not just those in DB
 
 ### Caching
 - Filter lists cached for 60 seconds
 - Invalidated after each vote
 - Saves ~0.01-0.02 sec per request
+- Gallery weights cached for 60 seconds
+- Gallery list from StashApp cached for 1 hour
+
+### Exclusion Thresholds
+- **1 image gallery:** 1 negative vote → threshold reached
+- **2 image gallery:** 1 negative vote → threshold reached
+- **3+ images gallery:** ≥33.3% negative votes → threshold reached
+- **Notification:** Shown once when threshold is reached
+- **Exclusion button:** Appears when threshold is reached
 
 **Details:** [`bot/voting.py`](bot/voting.py)
 
@@ -116,6 +132,18 @@ score = (positive_votes - negative_votes) / total_votes
    - First `/random`: 2-4 sec
    - Subsequent: ~1 sec (from cache)
    - Auto cache validation
+
+6. **File ID caching**
+   - Telegram file_id saved to DB after first send
+   - Reuse file_id for subsequent sends (no download needed)
+   - Separate cache for thumbnail and high-quality images
+   - Saves download time (~1-2 sec per image)
+
+7. **Service channel preloading**
+   - Optional: preload images to service channel for file_id
+   - Runs every minute via scheduler
+   - Preloads 2 high-quality images
+   - Significantly speeds up scheduled sends
 
 3. **Filter caching**
    - TTL: 60 seconds
@@ -170,7 +198,17 @@ gallery_preferences(gallery_id, gallery_title, positive_votes,
 - `idx_sent_at` on `sent_photos(sent_at)`
 - `idx_gallery_weight` on `gallery_preferences(weight)`
 
-**Details:** [`bot/database.py`](bot/database.py)
+### Database Structure
+- **Repository pattern:** Database split into repositories:
+  - `base.py` - Base database class
+  - `sent_photos.py` - Sent photos history
+  - `votes.py` - Votes management
+  - `preferences.py` - Performer/gallery preferences
+  - `weights.py` - Gallery weights and statistics
+  - `statistics.py` - Gallery statistics and image counts
+- **Backward compatibility:** Main `Database` class delegates to repositories
+
+**Details:** [`bot/database/`](bot/database/)
 
 ---
 
@@ -182,9 +220,10 @@ gallery_preferences(gallery_id, gallery_title, positive_votes,
 3. Update `/help` command with description
 
 ### Add DB Field
-1. In `database.py`: add to `CREATE TABLE` statement
-2. Create method to work with field
-3. Migration: users need to recreate DB or run migration script
+1. In appropriate repository (e.g., `database/preferences.py`): add to `CREATE TABLE` statement
+2. Create method to work with field in repository
+3. Add delegation in `database/__init__.py` if needed
+4. Migration: users need to recreate DB or run migration script
 
 ### Change Filtering Logic
 **File:** `bot/voting.py`  
@@ -250,14 +289,21 @@ async def my_function():
 
 ```
 bot/
-├── main.py              # Entry point (228 lines)
-├── config.py            # Configuration (107 lines)
-├── database.py          # SQLite DB (164 lines)
-├── stash_client.py      # GraphQL client (465 lines)
-├── telegram_handler.py  # Telegram commands (304 lines)
-├── scheduler.py         # Scheduler (131 lines)
-├── voting.py            # Voting system (200+ lines)
-└── performance.py       # Profiling (168 lines)
+├── main.py              # Entry point (~265 lines)
+├── config.py            # Configuration (~125 lines)
+├── database/            # SQLite DB (repository pattern)
+│   ├── __init__.py      # Main Database class
+│   ├── base.py          # Base database class
+│   ├── sent_photos.py   # Sent photos repository
+│   ├── votes.py         # Votes repository
+│   ├── preferences.py   # Preferences repository
+│   ├── weights.py       # Weights repository
+│   └── statistics.py    # Statistics repository
+├── stash_client.py      # GraphQL client (~1300 lines)
+├── telegram_handler.py  # Telegram commands (~1425 lines)
+├── scheduler.py         # Scheduler (~305 lines)
+├── voting.py            # Voting system (~320 lines)
+└── performance.py       # Profiling (~168 lines)
 
 data/
 └── sent_photos.db       # SQLite DB
@@ -273,7 +319,7 @@ README.md                # Getting started
 CHANGELOG.md             # Version history
 ```
 
-**Total:** ~1700 lines of code
+**Total:** ~4000+ lines of code
 
 ---
 
@@ -358,10 +404,13 @@ with sqlite3.connect(self.db_path) as conn:
 telegram:
   bot_token: "YOUR_TOKEN"
   allowed_user_ids: [123456789]
+  cache_channel_id: null  # Optional: Telegram channel ID for file_id caching
 
 stash:
   api_url: "http://localhost:9999/graphql"
-  api_key: ""
+  api_key: ""  # Optional
+  username: ""  # Optional: for Basic Auth
+  password: ""  # Optional: for Basic Auth
 
 scheduler:
   enabled: true
@@ -405,7 +454,7 @@ python-dotenv==1.0.0      # .env
 - **Main logic:** [`bot/telegram_handler.py`](bot/telegram_handler.py)
 - **Voting system:** [`bot/voting.py`](bot/voting.py)
 - **StashApp API:** [`bot/stash_client.py`](bot/stash_client.py)
-- **Database:** [`bot/database.py`](bot/database.py)
+- **Database:** [`bot/database/`](bot/database/)
 
 ### External Resources
 - [python-telegram-bot](https://docs.python-telegram-bot.org/)
@@ -421,7 +470,7 @@ python-dotenv==1.0.0      # .env
 - ✅ Non-privileged user in Docker
 - ✅ Read-only config mounting
 - ✅ HTTP timeouts
-- ✅ Rate limiting (10 sec between `/random`)
+- ✅ Rate limiting (2 sec between `/random`)
 
 ---
 
@@ -436,8 +485,9 @@ python-dotenv==1.0.0      # .env
 
 ---
 
-**Version:** 1.0.0 (compact)  
+**Version:** 1.1.0 (compact)  
 **Date:** 2026-01-30  
-**Status:** ✅ Production Ready
+**Status:** ✅ Production Ready  
+**Last Updated:** 2026-01-30
 
 *Compact version for efficient work in Cursor AI. Details → [CURSOR_FULL.md](CURSOR_FULL.md)*
