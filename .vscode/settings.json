@@ -12,19 +12,6 @@
     }
   },
 
-  // Ruff extension settings
-  "ruff.enable": true,
-  "ruff.organizeImports": true,
-  "ruff.fixAll": true,
-  "ruff.lint.enable": true,
-  "ruff.format.args": [],
-
-  // Show errors and warnings in editor
-  "python.linting.enabled": true,
-  "python.linting.ruffEnabled": true,
-  "python.linting.pylintEnabled": false,
-  "python.linting.flake8Enabled": false,
-
   // Editor settings
   "editor.rulers": [88],
   "files.trimTrailingWhitespace": true,

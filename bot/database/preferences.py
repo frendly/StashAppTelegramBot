@@ -1,34 +1,31 @@
 """Модуль для работы с таблицами performer_preferences и gallery_preferences."""
 
-import sqlite3
 import logging
+import sqlite3
 import time
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class PreferencesRepository:
     """Класс для работы с таблицами performer_preferences и gallery_preferences."""
-    
+
     def __init__(self, db_path: str):
         """
         Инициализация репозитория.
-        
+
         Args:
             db_path: Путь к файлу базы данных
         """
         self.db_path = db_path
-    
+
     def update_performer_preference(
-        self, 
-        performer_id: str, 
-        performer_name: str, 
-        vote: int
+        self, performer_id: str, performer_name: str, vote: int
     ):
         """
         Обновление предпочтений по перформеру.
-        
+
         Args:
             performer_id: ID перформера
             performer_name: Имя перформера
@@ -36,16 +33,19 @@ class PreferencesRepository:
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             # Получаем текущие данные
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT total_votes, positive_votes, negative_votes
                 FROM performer_preferences
                 WHERE performer_id = ?
-            """, (performer_id,))
-            
+            """,
+                (performer_id,),
+            )
+
             result = cursor.fetchone()
-            
+
             if result:
                 total_votes = result[0] + 1
                 positive_votes = result[1] + (1 if vote > 0 else 0)
@@ -54,124 +54,150 @@ class PreferencesRepository:
                 total_votes = 1
                 positive_votes = 1 if vote > 0 else 0
                 negative_votes = 1 if vote < 0 else 0
-            
+
             # Рассчитываем score
-            score = (positive_votes - negative_votes) / total_votes if total_votes > 0 else 0
-            
-            cursor.execute("""
+            score = (
+                (positive_votes - negative_votes) / total_votes
+                if total_votes > 0
+                else 0
+            )
+
+            cursor.execute(
+                """
                 INSERT OR REPLACE INTO performer_preferences
                 (performer_id, performer_name, total_votes, positive_votes, negative_votes, score, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (performer_id, performer_name, total_votes, positive_votes, negative_votes, score))
-            
+            """,
+                (
+                    performer_id,
+                    performer_name,
+                    total_votes,
+                    positive_votes,
+                    negative_votes,
+                    score,
+                ),
+            )
+
             conn.commit()
-            logger.debug(f"Обновлены предпочтения перформера: {performer_name} (score={score:.2f})")
-    
-    def get_performer_preferences(self) -> List[Dict[str, Any]]:
+            logger.debug(
+                f"Обновлены предпочтения перформера: {performer_name} (score={score:.2f})"
+            )
+
+    def get_performer_preferences(self) -> list[dict[str, Any]]:
         """
         Получение всех предпочтений по перформерам.
-        
+
         Returns:
             List[Dict]: Список предпочтений
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT performer_id, performer_name, total_votes, 
+            cursor.execute(
+                """
+                SELECT performer_id, performer_name, total_votes,
                        positive_votes, negative_votes, score
                 FROM performer_preferences
                 ORDER BY score DESC
-            """)
-            
+            """
+            )
+
             results = cursor.fetchall()
             return [
                 {
-                    'performer_id': row[0],
-                    'performer_name': row[1],
-                    'total_votes': row[2],
-                    'positive_votes': row[3],
-                    'negative_votes': row[4],
-                    'score': row[5]
+                    "performer_id": row[0],
+                    "performer_name": row[1],
+                    "total_votes": row[2],
+                    "positive_votes": row[3],
+                    "negative_votes": row[4],
+                    "score": row[5],
                 }
                 for row in results
             ]
-    
-    def get_blacklisted_performers(self) -> List[str]:
+
+    def get_blacklisted_performers(self) -> list[str]:
         """
         Получение списка перформеров с отрицательным score (blacklist).
-        
+
         Returns:
             List[str]: Список ID перформеров
         """
         start_time = time.perf_counter()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT performer_id
                 FROM performer_preferences
                 WHERE score < 0
-            """)
-            
+            """
+            )
+
             results = cursor.fetchall()
             ids = [row[0] for row in results]
-            
+
             duration = time.perf_counter() - start_time
-            logger.debug(f"⏱️  DB get_blacklisted_performers: {duration:.3f}s ({len(ids)} items)")
+            logger.debug(
+                f"⏱️  DB get_blacklisted_performers: {duration:.3f}s ({len(ids)} items)"
+            )
             return ids
-    
-    def get_whitelisted_performers(self) -> List[str]:
+
+    def get_whitelisted_performers(self) -> list[str]:
         """
         Получение списка перформеров с положительным score (whitelist).
-        
+
         Returns:
             List[str]: Список ID перформеров
         """
         start_time = time.perf_counter()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT performer_id
                 FROM performer_preferences
                 WHERE score > 0
                 ORDER BY score DESC
-            """)
-            
+            """
+            )
+
             results = cursor.fetchall()
             ids = [row[0] for row in results]
-            
+
             duration = time.perf_counter() - start_time
-            logger.debug(f"⏱️  DB get_whitelisted_performers: {duration:.3f}s ({len(ids)} items)")
+            logger.debug(
+                f"⏱️  DB get_whitelisted_performers: {duration:.3f}s ({len(ids)} items)"
+            )
             return ids
-    
+
     def update_gallery_preference(
-        self, 
-        gallery_id: str, 
-        gallery_title: str, 
-        vote: int
+        self, gallery_id: str, gallery_title: str, vote: int
     ) -> bool:
         """
         Обновление предпочтений по галерее.
-        
+
         Args:
             gallery_id: ID галереи
             gallery_title: Название галереи
             vote: 1 для лайка, -1 для дизлайка
-            
+
         Returns:
             bool: True если достигнут порог в 5 голосов и рейтинг еще не установлен
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             # Получаем текущие данные
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT total_votes, positive_votes, negative_votes, rating_set
                 FROM gallery_preferences
                 WHERE gallery_id = ?
-            """, (gallery_id,))
-            
+            """,
+                (gallery_id,),
+            )
+
             result = cursor.fetchone()
-            
+
             if result:
                 total_votes = result[0] + 1
                 positive_votes = result[1] + (1 if vote > 0 else 0)
@@ -182,235 +208,286 @@ class PreferencesRepository:
                 positive_votes = 1 if vote > 0 else 0
                 negative_votes = 1 if vote < 0 else 0
                 rating_set = False
-            
+
             # Рассчитываем score
-            score = (positive_votes - negative_votes) / total_votes if total_votes > 0 else 0
-            
-            cursor.execute("""
+            score = (
+                (positive_votes - negative_votes) / total_votes
+                if total_votes > 0
+                else 0
+            )
+
+            cursor.execute(
+                """
                 INSERT OR REPLACE INTO gallery_preferences
                 (gallery_id, gallery_title, total_votes, positive_votes, negative_votes, score, rating_set, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (gallery_id, gallery_title, total_votes, positive_votes, negative_votes, score, rating_set))
-            
+            """,
+                (
+                    gallery_id,
+                    gallery_title,
+                    total_votes,
+                    positive_votes,
+                    negative_votes,
+                    score,
+                    rating_set,
+                ),
+            )
+
             conn.commit()
-            logger.debug(f"Обновлены предпочтения галереи: {gallery_title} (score={score:.2f}, votes={total_votes})")
-            
+            logger.debug(
+                f"Обновлены предпочтения галереи: {gallery_title} (score={score:.2f}, votes={total_votes})"
+            )
+
             # Возвращаем True если достигнут порог и рейтинг еще не установлен
             return total_votes >= 5 and not rating_set
-    
+
     def mark_gallery_rating_set(self, gallery_id: str):
         """
         Отметить, что рейтинг галереи был установлен в Stash.
-        
+
         Args:
             gallery_id: ID галереи
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE gallery_preferences
                 SET rating_set = TRUE, updated_at = CURRENT_TIMESTAMP
                 WHERE gallery_id = ?
-            """, (gallery_id,))
+            """,
+                (gallery_id,),
+            )
             conn.commit()
             logger.debug(f"Рейтинг галереи {gallery_id} отмечен как установленный")
-    
-    def get_gallery_preferences(self) -> List[Dict[str, Any]]:
+
+    def get_gallery_preferences(self) -> list[dict[str, Any]]:
         """
         Получение всех предпочтений по галереям.
-        
+
         Returns:
             List[Dict]: Список предпочтений
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT gallery_id, gallery_title, total_votes, 
+            cursor.execute(
+                """
+                SELECT gallery_id, gallery_title, total_votes,
                        positive_votes, negative_votes, score
                 FROM gallery_preferences
                 ORDER BY score DESC
-            """)
-            
+            """
+            )
+
             results = cursor.fetchall()
             return [
                 {
-                    'gallery_id': row[0],
-                    'gallery_title': row[1],
-                    'total_votes': row[2],
-                    'positive_votes': row[3],
-                    'negative_votes': row[4],
-                    'score': row[5]
+                    "gallery_id": row[0],
+                    "gallery_title": row[1],
+                    "total_votes": row[2],
+                    "positive_votes": row[3],
+                    "negative_votes": row[4],
+                    "score": row[5],
                 }
                 for row in results
             ]
-    
-    def get_gallery_preference(self, gallery_id: str) -> Optional[Dict[str, Any]]:
+
+    def get_gallery_preference(self, gallery_id: str) -> dict[str, Any] | None:
         """
         Получение предпочтения для конкретной галереи.
-        
+
         Args:
             gallery_id: ID галереи
-            
+
         Returns:
             Optional[Dict]: Информация о предпочтении или None
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT gallery_id, gallery_title, total_votes, 
+            cursor.execute(
+                """
+                SELECT gallery_id, gallery_title, total_votes,
                        positive_votes, negative_votes, score
                 FROM gallery_preferences
                 WHERE gallery_id = ?
-            """, (gallery_id,))
-            
+            """,
+                (gallery_id,),
+            )
+
             result = cursor.fetchone()
             if not result:
                 return None
-            
+
             return {
-                'gallery_id': result[0],
-                'gallery_title': result[1],
-                'total_votes': result[2],
-                'positive_votes': result[3],
-                'negative_votes': result[4],
-                'score': result[5]
+                "gallery_id": result[0],
+                "gallery_title": result[1],
+                "total_votes": result[2],
+                "positive_votes": result[3],
+                "negative_votes": result[4],
+                "score": result[5],
             }
-    
-    def get_blacklisted_galleries(self) -> List[str]:
+
+    def get_blacklisted_galleries(self) -> list[str]:
         """
         Получение списка галерей с отрицательным score (blacklist).
-        
+
         Returns:
             List[str]: Список ID галерей
         """
         start_time = time.perf_counter()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT gallery_id
                 FROM gallery_preferences
                 WHERE score < 0
-            """)
-            
+            """
+            )
+
             results = cursor.fetchall()
             ids = [row[0] for row in results]
-            
+
             duration = time.perf_counter() - start_time
-            logger.debug(f"⏱️  DB get_blacklisted_galleries: {duration:.3f}s ({len(ids)} items)")
+            logger.debug(
+                f"⏱️  DB get_blacklisted_galleries: {duration:.3f}s ({len(ids)} items)"
+            )
             return ids
-    
-    def get_whitelisted_galleries(self) -> List[str]:
+
+    def get_whitelisted_galleries(self) -> list[str]:
         """
         Получение списка галерей с положительным score (whitelist).
-        
+
         Returns:
             List[str]: Список ID галерей
         """
         start_time = time.perf_counter()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT gallery_id
                 FROM gallery_preferences
                 WHERE score > 0
                 ORDER BY score DESC
-            """)
-            
+            """
+            )
+
             results = cursor.fetchall()
             ids = [row[0] for row in results]
-            
+
             duration = time.perf_counter() - start_time
-            logger.debug(f"⏱️  DB get_whitelisted_galleries: {duration:.3f}s ({len(ids)} items)")
+            logger.debug(
+                f"⏱️  DB get_whitelisted_galleries: {duration:.3f}s ({len(ids)} items)"
+            )
             return ids
-    
+
     def is_threshold_notification_shown(self, gallery_id: str) -> bool:
         """
         Проверка, показывалось ли уведомление о достижении порога для галереи.
-        
+
         Args:
             gallery_id: ID галереи
-            
+
         Returns:
             bool: True если уведомление уже показывалось
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT threshold_notification_shown
                 FROM gallery_preferences
                 WHERE gallery_id = ?
-            """, (gallery_id,))
-            
+            """,
+                (gallery_id,),
+            )
+
             result = cursor.fetchone()
             if not result:
                 return False
-            
+
             return bool(result[0]) if result[0] is not None else False
-    
+
     def mark_threshold_notification_shown(self, gallery_id: str):
         """
         Отметить, что уведомление о достижении порога было показано для галереи.
-        
+
         Args:
             gallery_id: ID галереи
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE gallery_preferences
                 SET threshold_notification_shown = TRUE
                 WHERE gallery_id = ?
-            """, (gallery_id,))
-            
+            """,
+                (gallery_id,),
+            )
+
             conn.commit()
-            logger.debug(f"Уведомление о пороге для галереи {gallery_id} отмечено как показанное")
-    
+            logger.debug(
+                f"Уведомление о пороге для галереи {gallery_id} отмечено как показанное"
+            )
+
     def ensure_gallery_exists(self, gallery_id: str, gallery_title: str) -> bool:
         """
         Убедиться, что галерея существует в базе с весом по умолчанию.
         Если галереи нет, создает запись с весом 1.0.
         Если галерея существует, обновляет название (на случай, если оно изменилось).
-        
+
         Args:
             gallery_id: ID галереи
             gallery_title: Название галереи
-            
+
         Returns:
             bool: True если галерея была создана, False если уже существовала
         """
         if not gallery_id or not gallery_title:
-            logger.warning(f"Попытка создать галерею с пустыми параметрами: gallery_id={gallery_id}, gallery_title={gallery_title}")
+            logger.warning(
+                f"Попытка создать галерею с пустыми параметрами: gallery_id={gallery_id}, gallery_title={gallery_title}"
+            )
             return False
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             # Используем INSERT OR IGNORE для избежания race conditions
             # Если галерея уже существует, INSERT OR IGNORE просто проигнорирует операцию
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT OR IGNORE INTO gallery_preferences
                 (gallery_id, gallery_title, weight, total_votes, positive_votes, negative_votes, score, excluded, updated_at)
                 VALUES (?, ?, 1.0, 0, 0, 0, 0.0, FALSE, CURRENT_TIMESTAMP)
-            """, (gallery_id, gallery_title))
-            
+            """,
+                (gallery_id, gallery_title),
+            )
+
             # Проверяем, была ли создана новая запись
             # В SQLite rowcount для INSERT OR IGNORE возвращает 1 если вставка произошла, 0 если проигнорирована
             gallery_created = cursor.rowcount > 0
-            
+
             # Обновляем название галереи, если оно изменилось
             # Это нужно делать всегда (не только если галерея не была создана),
             # так как название в Stash могло измениться
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE gallery_preferences
                 SET gallery_title = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE gallery_id = ? AND gallery_title != ?
-            """, (gallery_title, gallery_id, gallery_title))
-            
+            """,
+                (gallery_title, gallery_id, gallery_title),
+            )
+
             conn.commit()
-            
+
             if gallery_created:
-                logger.debug(f"Создана запись для галереи: {gallery_title} (ID: {gallery_id}) с весом 1.0")
+                logger.debug(
+                    f"Создана запись для галереи: {gallery_title} (ID: {gallery_id}) с весом 1.0"
+                )
             else:
                 logger.debug(f"Галерея {gallery_id} уже существует в базе")
-            
+
             return gallery_created
