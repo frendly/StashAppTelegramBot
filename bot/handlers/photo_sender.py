@@ -108,14 +108,13 @@ class PhotoSender:
         use_high_quality: bool = False,
     ) -> bool:
         """
-        Отправка случайного фото.
+        Отправка случайного фото из кеша (только из StashApp).
 
         Args:
             chat_id: ID чата для отправки
             user_id: ID пользователя (для статистики)
             context: Контекст бота (опционально)
-            use_high_quality: Если True, использует preview качество (для автоматических задач)
-                            Если False, использует thumbnail (быстро, для ручных команд)
+            use_high_quality: Игнорируется (всегда используется file_id из кеша)
 
         Returns:
             bool: True если отправка успешна
@@ -124,83 +123,43 @@ class PhotoSender:
         timer.start()
 
         try:
-            # Проверка наличия предзагруженного изображения
-            image = None
-            image_data = None
-            used_prefetch = False
-            cached_file_id = None  # file_id из кеша БД
+            # Получаем список недавно отправленных ID для исключения
+            recent_ids = self.database.get_recent_image_ids(
+                self.config.history.avoid_recent_days
+            )
 
-            if self._prefetched_image and not use_high_quality:
-                # Предзагруженное изображение используется только для ручных команд (низкое качество)
-                # Для автоматических задач (высокое качество) всегда загружаем новое
-                # Упрощенная проверка: просто проверяем наличие в кеше БД
-                prefetched_image = self._prefetched_image["image"]
+            # Получаем случайное изображение из кеша (только с telegram_file_id)
+            image = await self.image_selector.get_random_image_from_cache(recent_ids)
 
-                # Проверяем, что изображение есть в кеше БД
-                cached_file_id = self.database.get_file_id(
-                    prefetched_image.id, use_high_quality=True
-                )
-                if cached_file_id:
-                    logger.info("⚡ Используется предзагруженное изображение")
-                    image = prefetched_image
-                    image_data = self._prefetched_image["image_data"]
-                    self._prefetched_image = None  # Очистка кэша
-                    used_prefetch = True
-                    timer.checkpoint("Use prefetched image")
-                else:
-                    logger.info("⚠️ Предзагруженное изображение не в кеше, пропускаем")
-                    self._prefetched_image = None  # Очистка устаревшего кэша
-                    timer.checkpoint("Clear stale cache")
-
-            # Если нет изображения, загружаем из кеша
-            # Если image_data отсутствует, но есть cached_file_id - это нормально, используем file_id
             if not image:
-                logger.info("Запрос случайного фото из кеша")
+                logger.warning("⚠️ Кеш пуст или не найдено подходящих изображений")
+                if context:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="⏳ Кеш пуст. Подождите, пока изображения будут предзагружены в служебный канал.",
+                    )
+                return False
 
-                # Упрощенная логика: просто берем случайное изображение из кеша
-                cached_image_id = self.database.get_random_cached_image_id()
+            # Получаем file_id из объекта изображения (уже загружен из кеша)
+            file_id = image.telegram_file_id
 
-                if cached_image_id:
-                    logger.info(f"⚡ Выбрано изображение из кеша: {cached_image_id}")
-                    # Получаем метаданные изображения
-                    image = await self.stash_client.get_image_by_id(cached_image_id)
-                    if image:
-                        # Получаем file_id из кеша
-                        cached_file_id = self.database.get_file_id(
-                            image.id, use_high_quality=True
-                        )
-                        if cached_file_id:
-                            logger.info(f"✅ Используется кеш для {image.id}")
-                            image_data = None  # Не нужно скачивать файл
-                            timer.checkpoint("Get from cache")
-                        else:
-                            logger.warning(f"⚠️ file_id не найден для {image.id}")
-                            image = None
-                    else:
-                        logger.warning(
-                            f"⚠️ Не удалось получить метаданные для {cached_image_id}"
-                        )
-                        image = None
+            if not file_id:
+                logger.warning(
+                    f"⚠️ telegram_file_id не найден для изображения {image.id} в объекте (должен быть в details)"
+                )
+                if context:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="⏳ Изображение не в кеше. Подождите, пока оно будет предзагружено.",
+                    )
+                return False
 
-                # ТЕСТ: Используем только кеш, без fallback на StashApp
-                if not image:
-                    logger.warning("⚠️ Кеш пуст или не удалось получить изображение")
-                    if context:
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="⏳ Кеш пуст. Подождите, пока изображения будут предзагружены в служебный канал.",
-                        )
-                    return False
+            timer.checkpoint("Get from cache")
 
             # Определяем, было ли изображение предзагружено из служебного канала
-            # cached_file_id уже установлен в нужных местах выше, но проверяем еще раз для надежности
-            if cached_file_id is None and image:
-                cached_file_id = self.database.get_file_id(
-                    image.id, use_high_quality=True
-                )
-            is_preloaded_from_cache = cached_file_id is not None
+            is_preloaded_from_cache = file_id is not None
             logger.info(
-                f"Image {image.id}: cached_file_id={'YES' if cached_file_id else 'NO'}, is_preloaded_from_cache={is_preloaded_from_cache}"
+                f"Image {image.id}: file_id={'YES' if file_id else 'NO'}, is_preloaded_from_cache={is_preloaded_from_cache}"
             )
 
             # Проверка достижения порога и формирование подписи
@@ -257,17 +216,14 @@ class PhotoSender:
 
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            # Отправка фото
+            # Отправка фото используя file_id
             sent_message = None
-            file_id_to_save = None
 
             try:
                 if context:
-                    # Используем file_id если есть, иначе image_data
-                    photo_source = cached_file_id if cached_file_id else image_data
                     sent_message = await context.bot.send_photo(
                         chat_id=chat_id,
-                        photo=photo_source,
+                        photo=file_id,
                         caption=caption,
                         parse_mode="HTML",
                         reply_markup=reply_markup,
@@ -275,150 +231,65 @@ class PhotoSender:
                 else:
                     # Для планировщика используем application
                     if self.application:
-                        photo_source = cached_file_id if cached_file_id else image_data
                         sent_message = await self.application.bot.send_photo(
                             chat_id=chat_id,
-                            photo=photo_source,
+                            photo=file_id,
                             caption=caption,
                             parse_mode="HTML",
                             reply_markup=reply_markup,
                         )
 
-                # Получаем file_id из ответа для сохранения
-                if sent_message and sent_message.photo:
-                    file_id_to_save = sent_message.photo[-1].file_id
-
             except asyncio.CancelledError:
                 # Пробрасываем CancelledError дальше
                 raise
             except TelegramError as e:
-                # Если file_id недействителен, пробуем загрузить файл
-                if cached_file_id and "file_id" in str(e).lower():
-                    logger.warning(
-                        f"file_id недействителен для {image.id}, загружаем файл: {e}"
-                    )
-                    # Загружаем файл заново
-                    image_url = image.get_image_url(use_high_quality)
-                    image_data = await self.stash_client.download_image(image_url)
-                    if not image_data:
-                        logger.error(
-                            f"Не удалось скачать изображение {image.id} после ошибки file_id"
-                        )
-                        if context:
-                            try:
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="❌ Не удалось отправить изображение. Попробуйте позже.",
-                                )
-                            except asyncio.CancelledError:
-                                raise
-                        return False
-
-                    # Повторная отправка с файлом
+                # Если file_id недействителен, логируем ошибку
+                logger.error(
+                    f"file_id недействителен для {image.id}: {e}. "
+                    "Изображение нужно перезагрузить в кеш."
+                )
+                if context:
                     try:
-                        if context:
-                            sent_message = await context.bot.send_photo(
-                                chat_id=chat_id,
-                                photo=image_data,
-                                caption=caption,
-                                parse_mode="HTML",
-                                reply_markup=reply_markup,
-                            )
-                        else:
-                            if self.application:
-                                sent_message = await self.application.bot.send_photo(
-                                    chat_id=chat_id,
-                                    photo=image_data,
-                                    caption=caption,
-                                    parse_mode="HTML",
-                                    reply_markup=reply_markup,
-                                )
-
-                        if sent_message and sent_message.photo:
-                            file_id_to_save = sent_message.photo[-1].file_id
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ Не удалось отправить изображение. Попробуйте позже.",
+                        )
                     except asyncio.CancelledError:
                         raise
-                else:
-                    raise
+                return False
 
             timer.checkpoint("Send to Telegram")
 
-            # Сохранение file_id в БД если еще не сохранен
-            if file_id_to_save:
-                if use_high_quality:
-                    # Сохраняем file_id_high_quality
-                    existing_file_id = self.database.get_file_id(
-                        image.id, use_high_quality=True
+            # Получаем file_id из ответа для обновления в StashApp (если изменился)
+            if sent_message and sent_message.photo:
+                new_file_id = sent_message.photo[-1].file_id
+                # Обновляем в StashApp если file_id изменился
+                if new_file_id != file_id:
+                    await self.stash_client.save_telegram_file_id(image.id, new_file_id)
+                    logger.debug(
+                        f"Обновлен file_id для изображения {image.id} в StashApp"
                     )
-                    if not existing_file_id:
-                        self.database.save_file_id(
-                            image.id, file_id_to_save, use_high_quality=True
-                        )
-                else:
-                    # Для ручных запросов
-                    if cached_file_id:
-                        # Использовали file_id_high_quality из кеша
-                        # Проверяем, сохранен ли он в БД, если нет - сохраняем
-                        existing_file_id_hq = self.database.get_file_id(
-                            image.id, use_high_quality=True
-                        )
-                        if not existing_file_id_hq:
-                            # Сохраняем file_id_high_quality (может отличаться от file_id_to_save)
-                            self.database.save_file_id(
-                                image.id, cached_file_id, use_high_quality=True
-                            )
-                    else:
-                        # Загрузили thumbnail, сохраняем file_id
-                        existing_file_id = self.database.get_file_id(
-                            image.id, use_high_quality=False
-                        )
-                        if not existing_file_id:
-                            self.database.save_file_id(
-                                image.id, file_id_to_save, use_high_quality=False
-                            )
 
-            # Определяем file_id_high_quality для сохранения в add_sent_photo
-            file_id_high_quality_to_save = None
-
-            if use_high_quality:
-                # Для высокого качества: используем cached_file_id если есть, иначе file_id_to_save
-                file_id_high_quality_to_save = (
-                    cached_file_id if cached_file_id else file_id_to_save
-                )
-            else:
-                # Для ручных запросов: если есть cached_file_id (это file_id_high_quality), сохраняем его
-                if cached_file_id:
-                    file_id_high_quality_to_save = cached_file_id
-
-            logger.info(
-                f"Image {image.id}: file_id_high_quality_to_save={'YES' if file_id_high_quality_to_save else 'NO'}, cached_file_id={'YES' if cached_file_id else 'NO'}"
-            )
-
-            # Сохранение в базу данных
+            # Сохранение в базу данных (только для статистики, без file_id)
             self.database.add_sent_photo(
                 image_id=image.id,
                 user_id=user_id,
                 title=image.title,
-                file_id_high_quality=file_id_high_quality_to_save,
+                file_id_high_quality=None,  # Больше не сохраняем в БД
             )
             timer.checkpoint("Save to database")
 
             # Сохранение изображения в кэш для обработки голосования
-            # Обновляем кэш ПОСЛЕ успешного сохранения в БД для консистентности
             if user_id:
                 self._last_sent_images[user_id] = image
                 self._last_sent_image_id[user_id] = image.id
 
-            # Запуск фоновой предзагрузки следующего изображения
-            # Только если была команда от пользователя (не планировщик)
-            if user_id:
-                asyncio.create_task(self.prefetch_next_image())
-                logger.debug("🔄 Запущена фоновая предзагрузка следующего изображения")
+            # Проверка размера кеша и пополнение при необходимости
+            if self.config.cache:
+                asyncio.create_task(self._check_and_refill_cache())
 
             timer.end()
-            logger.info(
-                f"Фото успешно отправлено: {image.id} {'(использована предзагрузка)' if used_prefetch else ''}"
-            )
+            logger.info(f"Фото успешно отправлено: {image.id} (из кеша)")
             return True
 
         except asyncio.CancelledError:
@@ -435,52 +306,37 @@ class PhotoSender:
             timer.end()
             return False
 
-    async def prefetch_next_image(self):
+    async def _check_and_refill_cache(self):
         """
-        Предзагрузка следующего изображения в фоновом режиме.
-        Выполняется асинхронно после отправки текущего фото.
+        Проверка размера кеша и пополнение при необходимости.
+
+        Выполняется в фоновом режиме после отправки фото.
         """
-        async with self._prefetch_lock:
-            try:
-                logger.debug("🔄 Начало предзагрузки следующего изображения...")
+        try:
+            if not self.config.cache:
+                return
 
-                # Получение списка недавно отправленных ID
-                recent_ids = self.database.get_recent_image_ids(
-                    self.config.history.avoid_recent_days
-                )
+            cache_size = await self.stash_client.get_cache_size()
+            min_cache_size = self.config.cache.min_cache_size
 
-                # Получение случайного изображения с учетом предпочтений
-                image = await self.image_selector.get_random_image(recent_ids)
-
-                if not image:
-                    logger.warning("⚠️ Не удалось предзагрузить изображение")
-                    return
-
-                # Скачивание изображения (предзагрузка всегда использует низкое качество для скорости)
-                image_url = image.get_image_url(use_high_quality=False)
-                image_data = await self.stash_client.download_image(image_url)
-
-                if not image_data:
-                    logger.warning(
-                        f"⚠️ Не удалось скачать изображение {image.id} для предзагрузки"
-                    )
-                    return
-
-                # Сохранение в кэш
-                self._prefetched_image = {"image": image, "image_data": image_data}
-
+            if cache_size < min_cache_size:
+                deficit = min_cache_size - cache_size
                 logger.info(
-                    f"✅ Предзагружено изображение {image.id} ({len(image_data) / 1024:.1f} KB)"
+                    f"Размер кеша: {cache_size}/{min_cache_size}. "
+                    f"Нужно пополнить на {deficit} изображений"
                 )
-
-            except Exception as e:
-                logger.error(f"❌ Ошибка при предзагрузке изображения: {e}")
+                # Пополнение будет выполнено планировщиком
+                # Здесь только логируем для информации
+        except Exception as e:
+            logger.error(f"Ошибка при проверке размера кеша: {e}")
 
     async def preload_image_to_cache(
         self, image: StashImage, use_high_quality: bool = True
     ):
         """
         Предзагрузка изображения в служебный канал для получения file_id.
+
+        Сохраняет file_id в StashApp (кастомное поле telegram_file_id).
 
         Args:
             image: Объект изображения StashImage
@@ -497,13 +353,12 @@ class PhotoSender:
             return
 
         try:
-            # Проверяем, не сохранен ли уже file_id
-            existing_file_id = self.database.get_file_id(
-                image.id, use_high_quality=use_high_quality
-            )
+            # Проверяем, не сохранен ли уже file_id в StashApp
+            # Используем telegram_file_id из объекта, если он уже загружен
+            existing_file_id = image.telegram_file_id
             if existing_file_id:
                 logger.debug(
-                    f"file_id для изображения {image.id} уже сохранен, пропускаем предзагрузку"
+                    f"telegram_file_id для изображения {image.id} уже сохранен в StashApp (details не пусто), пропускаем предзагрузку"
                 )
                 return
 
@@ -525,16 +380,19 @@ class PhotoSender:
             # Получение file_id из ответа (берем самый большой размер)
             file_id = sent_message.photo[-1].file_id
 
-            # Сохранение file_id в БД
-            self.database.save_file_id(
-                image.id, file_id, use_high_quality=use_high_quality
-            )
+            # Сохранение file_id в StashApp
+            success = await self.stash_client.save_telegram_file_id(image.id, file_id)
 
-            logger.info(
-                f"✅ Предзагружено изображение {image.id} в служебный канал "
-                f"({'high quality' if use_high_quality else 'thumbnail'}, "
-                f"{len(image_data) / 1024:.1f} KB, file_id={file_id[:20]}...)"
-            )
+            if success:
+                logger.info(
+                    f"✅ Предзагружено изображение {image.id} в служебный канал "
+                    f"({'high quality' if use_high_quality else 'thumbnail'}, "
+                    f"{len(image_data) / 1024:.1f} KB, file_id={file_id[:20]}...)"
+                )
+            else:
+                logger.warning(
+                    f"⚠️ Предзагружено изображение {image.id}, но не удалось сохранить file_id в StashApp"
+                )
 
         except TelegramError as e:
             logger.error(

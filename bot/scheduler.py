@@ -232,8 +232,11 @@ class Scheduler:
         """
         Фоновая задача предзагрузки изображений в служебный канал.
 
-        Предзагружает 2 изображения high quality в служебный канал для получения file_id_high_quality.
-        Это ускоряет отправку изображений пользователям.
+        Стратегия 80/20:
+        - 80% новых изображений (без telegram_file_id) - равномерно по галереям
+        - 20% известных изображений (с telegram_file_id) - по весам популярности
+
+        Поддерживает минимальный размер кеша (по умолчанию 200).
         """
         if not self.database or not self.stash_client or not self.telegram_handler:
             logger.warning(
@@ -248,36 +251,51 @@ class Scheduler:
         try:
             logger.debug("Начало предзагрузки изображений в служебный канал...")
 
+            # Проверка размера кеша
+            cache_size = await self.stash_client.get_cache_size()
+            min_cache_size = (
+                self.config.cache.min_cache_size if self.config.cache else 200
+            )
+
+            # Определяем размер пакета для предзагрузки
+            if cache_size < min_cache_size:
+                # Критический уровень - загружаем больше
+                needed = min_cache_size - cache_size
+                batch_size = min(needed, 10)  # Максимум 10 за раз
+                logger.info(
+                    f"Размер кеша: {cache_size}/{min_cache_size}. "
+                    f"Загружаем {batch_size} изображений для пополнения"
+                )
+            else:
+                # Нормальный уровень - обычная предзагрузка
+                batch_size = 2
+
             # Получение списка недавно отправленных ID
             recent_ids = self.database.get_recent_image_ids(
                 self.config.history.avoid_recent_days
             )
 
-            # Получение 2 случайных изображений с учетом предпочтений
-            images_to_preload = []
-            for _ in range(2):
-                try:
-                    # Используем публичный метод из telegram_handler для получения случайного изображения
-                    # Это обеспечивает единую логику выбора с учетом весов галерей и фильтров
-                    # update_last_selected=False - не обновляем статистику при предзагрузке в служебный канал
-                    exclude_ids = recent_ids + [img.id for img in images_to_preload]
-                    image = await self.telegram_handler.get_random_image(
-                        exclude_ids, update_last_selected=False
-                    )
-                    if image:
-                        images_to_preload.append(image)
-                except Exception as e:
-                    logger.warning(
-                        f"Ошибка при получении изображения для предзагрузки: {e}"
-                    )
-                    continue
+            # 80% новых (без telegram_file_id)
+            new_count = int(batch_size * 0.8)
+            new_images = await self.stash_client.get_images_without_file_id(
+                count=new_count, exclude_ids=recent_ids
+            )
+
+            # 20% известных (с telegram_file_id) - обновляем для надежности
+            known_count = batch_size - new_count
+            known_images = await self.stash_client.get_images_with_file_id(
+                count=known_count, exclude_ids=recent_ids
+            )
+
+            images_to_preload = new_images + known_images
 
             if not images_to_preload:
                 logger.warning("Не удалось получить изображения для предзагрузки")
                 return
 
             logger.info(
-                f"Получено {len(images_to_preload)} изображений для предзагрузки"
+                f"Получено {len(images_to_preload)} изображений для предзагрузки "
+                f"(новых: {len(new_images)}, известных: {len(known_images)})"
             )
 
             # Предзагрузка каждого изображения

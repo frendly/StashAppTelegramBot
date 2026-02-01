@@ -348,3 +348,23 @@ class SentPhotosRepository:
                 )
 
             return image_id
+
+    def get_all_file_ids_for_migration(self) -> list[tuple[str, str]]:
+        """
+        Получение всех уникальных image_id с file_id_high_quality для миграции.
+
+        Returns:
+            List[tuple[str, str]]: Список кортежей (image_id, file_id_high_quality)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT DISTINCT image_id, file_id_high_quality
+                FROM sent_photos
+                WHERE file_id_high_quality IS NOT NULL
+                ORDER BY image_id
+            """
+            )
+            results = cursor.fetchall()
+            return [(row[0], row[1]) for row in results]

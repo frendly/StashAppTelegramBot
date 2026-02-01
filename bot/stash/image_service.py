@@ -63,6 +63,7 @@ class ImageService:
                 id
                 name
               }
+              details
             }
           }
         }
@@ -208,6 +209,7 @@ class ImageService:
                 id
                 name
               }
+              details
             }
           }
         }
@@ -290,6 +292,7 @@ class ImageService:
                 id
                 name
               }
+              details
             }
           }
         }
@@ -614,6 +617,7 @@ class ImageService:
               id
               name
             }
+            details
           }
         }
         """

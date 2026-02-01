@@ -39,6 +39,10 @@ class StashImage:
             {"id": p["id"], "name": p["name"]} for p in data.get("performers", [])
         ]
 
+        # Telegram file_id (хранится в поле details в StashApp)
+        # details содержит telegram_file_id как простую строку
+        self.telegram_file_id = data.get("details")
+
     def get_image_url(self, use_high_quality: bool = False) -> str:
         """
         Получение URL изображения с указанным качеством.

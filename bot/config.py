@@ -50,6 +50,14 @@ class DatabaseConfig:
 
 
 @dataclass
+class CacheConfig:
+    """Конфигурация кеша изображений."""
+
+    min_cache_size: int = 200
+    migrate_file_ids: bool = False
+
+
+@dataclass
 class BotConfig:
     """Общая конфигурация бота."""
 
@@ -58,6 +66,7 @@ class BotConfig:
     scheduler: SchedulerConfig
     history: HistoryConfig
     database: DatabaseConfig
+    cache: CacheConfig | None = None
 
 
 def load_config(config_path: str = "config.yml") -> BotConfig:
@@ -117,6 +126,13 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
 
     database_config = DatabaseConfig(path=config_data["database"]["path"])
 
+    # Конфигурация кеша (опционально)
+    cache_data = config_data.get("cache", {})
+    cache_config = CacheConfig(
+        min_cache_size=cache_data.get("min_cache_size", 200),
+        migrate_file_ids=cache_data.get("migrate_file_ids", False),
+    )
+
     # Валидация конфигурации
     if (
         not telegram_config.bot_token
@@ -134,10 +150,14 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
     if history_config.avoid_recent_days < 1:
         raise ValueError("❌ avoid_recent_days должен быть >= 1")
 
+    if cache_config.min_cache_size < 1:
+        raise ValueError("❌ min_cache_size должен быть >= 1")
+
     return BotConfig(
         telegram=telegram_config,
         stash=stash_config,
         scheduler=scheduler_config,
         history=history_config,
         database=database_config,
+        cache=cache_config,
     )

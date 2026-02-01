@@ -148,3 +148,36 @@ class ImageSelector:
         return await self.stash_client.get_random_image_with_retry(
             exclude_ids=exclude_ids, max_retries=5
         )
+
+    async def get_random_image_from_cache(
+        self, exclude_ids: list[str] | None = None
+    ) -> StashImage | None:
+        """
+        Получение случайного изображения из кеша (с telegram_file_id в StashApp).
+
+        Используется для отправки пользователям - только из кеша.
+
+        Args:
+            exclude_ids: Список ID изображений для исключения
+
+        Returns:
+            Optional[StashImage]: Случайное изображение из кеша или None
+        """
+        exclude_ids = exclude_ids or []
+
+        try:
+            # Получаем случайное изображение из кеша
+            image = await self.stash_client.get_random_image_from_cache(exclude_ids)
+
+            if image:
+                logger.debug(
+                    f"Изображение получено из кеша: {image.id} (галерея: {image.gallery_title})"
+                )
+                return image
+            else:
+                logger.warning("Кеш пуст или не найдено подходящих изображений")
+                return None
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении изображения из кеша: {e}")
+            return None

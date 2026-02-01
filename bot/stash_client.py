@@ -1,6 +1,7 @@
 """Клиент для работы с StashApp GraphQL API (фасад)."""
 
 from bot.stash.client import StashGraphQLClient
+from bot.stash.file_id_service import FileIdService
 from bot.stash.gallery_service import GalleryService
 from bot.stash.image_service import ImageService
 from bot.stash.metrics import CategoryMetrics
@@ -41,6 +42,7 @@ class StashClient:
         self._image_service = ImageService(self._client, self._category_metrics)
         self._gallery_service = GalleryService(self._client)
         self._rating_service = RatingService(self._client)
+        self._file_id_service = FileIdService(self._client)
 
         # Сохраняем для обратной совместимости
         self.api_url = api_url
@@ -153,6 +155,39 @@ class StashClient:
     async def update_gallery_rating(self, gallery_id: str, rating: int) -> bool:
         """Обновление рейтинга галереи."""
         return await self._rating_service.update_gallery_rating(gallery_id, rating)
+
+    # Делегирование методов FileIdService
+    async def save_telegram_file_id(self, image_id: str, file_id: str) -> bool:
+        """Сохранение telegram_file_id для изображения."""
+        return await self._file_id_service.save_telegram_file_id(image_id, file_id)
+
+    async def get_telegram_file_id(self, image_id: str) -> str | None:
+        """Получение telegram_file_id для изображения."""
+        return await self._file_id_service.get_telegram_file_id(image_id)
+
+    async def get_cache_size(self) -> int:
+        """Получение размера кеша (количество изображений с telegram_file_id)."""
+        return await self._file_id_service.get_cache_size()
+
+    async def get_images_without_file_id(
+        self, count: int, exclude_ids: list[str] | None = None
+    ) -> list[StashImage]:
+        """Получение изображений без telegram_file_id (новые для кеша)."""
+        return await self._file_id_service.get_images_without_file_id(
+            count, exclude_ids
+        )
+
+    async def get_images_with_file_id(
+        self, count: int, exclude_ids: list[str] | None = None
+    ) -> list[StashImage]:
+        """Получение изображений с telegram_file_id (известные для обновления)."""
+        return await self._file_id_service.get_images_with_file_id(count, exclude_ids)
+
+    async def get_random_image_from_cache(
+        self, exclude_ids: list[str] | None = None
+    ) -> StashImage | None:
+        """Получение случайного изображения из кеша (с telegram_file_id)."""
+        return await self._file_id_service.get_random_image_from_cache(exclude_ids)
 
     # Делегирование методов CategoryMetrics
     def get_category_metrics(self, gallery_id: str | None = None) -> dict:
