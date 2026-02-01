@@ -1,5 +1,6 @@
 """Клиент для работы с StashApp GraphQL API."""
 
+import asyncio
 import aiohttp
 import logging
 import random
@@ -347,6 +348,11 @@ class StashClient:
                 
                 return data.get('data', {})
         
+        except asyncio.CancelledError:
+            # Пробрасываем CancelledError дальше - это нормальная часть механизма отмены задач
+            duration = time.perf_counter() - start_time
+            logger.debug(f"GraphQL query cancelled after {duration:.3f}s")
+            raise
         except aiohttp.ClientError as e:
             duration = time.perf_counter() - start_time
             logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: {e}")
@@ -964,6 +970,11 @@ class StashClient:
                 logger.info(f"⏱️  Image download: {duration:.3f}s ({size_kb:.1f} KB, {size_kb/duration:.1f} KB/s)")
                 return image_data
         
+        except asyncio.CancelledError:
+            # Пробрасываем CancelledError дальше - это нормальная часть механизма отмены задач
+            duration = time.perf_counter() - start_time
+            logger.debug(f"Image download cancelled after {duration:.3f}s")
+            raise
         except aiohttp.ClientError as e:
             duration = time.perf_counter() - start_time
             logger.error(f"⏱️  Image download failed after {duration:.3f}s: {e}")

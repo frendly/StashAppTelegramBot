@@ -190,6 +190,9 @@ class Bot:
                             text="⚠️ <b>Бот останавливается...</b>",
                             parse_mode='HTML'
                         )
+                    except asyncio.CancelledError:
+                        # Игнорируем отмену при остановке - это нормально
+                        pass
                     except Exception:
                         pass
             

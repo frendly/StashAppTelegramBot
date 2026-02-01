@@ -364,6 +364,11 @@ class TelegramHandler:
             logger.info(f"Фото успешно отправлено: {image.id} {'(использована предзагрузка)' if used_prefetch else ''}")
             return True
         
+        except asyncio.CancelledError:
+            # Пробрасываем CancelledError дальше - это нормальная часть механизма отмены задач
+            timer.end()
+            logger.debug("Отправка фото отменена")
+            raise
         except TelegramError as e:
             logger.error(f"Ошибка Telegram при отправке фото: {e}")
             timer.end()
