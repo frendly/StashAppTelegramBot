@@ -202,13 +202,21 @@ class Bot:
             
             # Остановка Telegram бота
             if self.application:
-                await self.application.updater.stop()
-                await self.application.stop()
-                await self.application.shutdown()
+                try:
+                    await self.application.updater.stop()
+                    await self.application.stop()
+                    await self.application.shutdown()
+                except asyncio.CancelledError:
+                    # Игнорируем отмену при остановке - это нормально
+                    logger.debug("Telegram бот остановлен (задача отменена)")
             
             # Закрытие StashApp клиента
             if self.stash_client:
-                await self.stash_client.__aexit__(None, None, None)
+                try:
+                    await self.stash_client.__aexit__(None, None, None)
+                except asyncio.CancelledError:
+                    # Игнорируем отмену при остановке - это нормально
+                    logger.debug("StashApp клиент закрыт (задача отменена)")
             
             logger.info("✅ Бот остановлен")
             

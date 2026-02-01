@@ -312,11 +312,17 @@ class StashClient:
                 # Пытаемся прочитать ответ как JSON
                 try:
                     data = await response.json()
+                except asyncio.CancelledError:
+                    # Пробрасываем CancelledError дальше
+                    raise
                 except Exception:
                     # Если ответ не JSON, читаем как текст для логирования
                     try:
                         text_response = await response.text()
                         logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: HTTP {response.status}, non-JSON response: {text_response[:500]}")
+                    except asyncio.CancelledError:
+                        # Пробрасываем CancelledError дальше
+                        raise
                     except Exception:
                         logger.error(f"⏱️  GraphQL query failed after {duration:.3f}s: HTTP {response.status}, failed to read response body")
                     # Выбрасываем HTTP ошибку (выбросит aiohttp.ClientResponseError при статусе >= 400)

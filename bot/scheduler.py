@@ -1,5 +1,6 @@
 """Планировщик для автоматической отправки фото по расписанию."""
 
+import asyncio
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -138,6 +139,10 @@ class Scheduler:
         try:
             logger.info(f"Выполнение запланированной отправки для user_id={user_id}")
             await self.telegram_handler.send_scheduled_photo(chat_id=user_id, user_id=user_id)
+        except asyncio.CancelledError:
+            # Пробрасываем CancelledError дальше - это нормальная часть механизма отмены задач
+            logger.debug(f"Запланированная отправка для user_id={user_id} отменена")
+            raise
         except Exception as e:
             logger.error(f"Ошибка при отправке запланированного фото: {e}")
     

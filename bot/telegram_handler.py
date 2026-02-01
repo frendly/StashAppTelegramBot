@@ -274,6 +274,9 @@ class TelegramHandler:
                 if sent_message and sent_message.photo:
                     file_id_to_save = sent_message.photo[-1].file_id
                 
+            except asyncio.CancelledError:
+                # Пробрасываем CancelledError дальше
+                raise
             except TelegramError as e:
                 # Если file_id недействителен, пробуем загрузить файл
                 if cached_file_id and "file_id" in str(e).lower():
@@ -284,33 +287,39 @@ class TelegramHandler:
                     if not image_data:
                         logger.error(f"Не удалось скачать изображение {image.id} после ошибки file_id")
                         if context:
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ Не удалось отправить изображение. Попробуйте позже."
-                            )
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="❌ Не удалось отправить изображение. Попробуйте позже."
+                                )
+                            except asyncio.CancelledError:
+                                raise
                         return False
                     
                     # Повторная отправка с файлом
-                    if context:
-                        sent_message = await context.bot.send_photo(
-                            chat_id=chat_id,
-                            photo=image_data,
-                            caption=caption,
-                            parse_mode='HTML',
-                            reply_markup=reply_markup
-                        )
-                    else:
-                        if self.application:
-                            sent_message = await self.application.bot.send_photo(
+                    try:
+                        if context:
+                            sent_message = await context.bot.send_photo(
                                 chat_id=chat_id,
                                 photo=image_data,
                                 caption=caption,
                                 parse_mode='HTML',
                                 reply_markup=reply_markup
                             )
-                    
-                    if sent_message and sent_message.photo:
-                        file_id_to_save = sent_message.photo[-1].file_id
+                        else:
+                            if self.application:
+                                sent_message = await self.application.bot.send_photo(
+                                    chat_id=chat_id,
+                                    photo=image_data,
+                                    caption=caption,
+                                    parse_mode='HTML',
+                                    reply_markup=reply_markup
+                                )
+                        
+                        if sent_message and sent_message.photo:
+                            file_id_to_save = sent_message.photo[-1].file_id
+                    except asyncio.CancelledError:
+                        raise
                 else:
                     raise
             
