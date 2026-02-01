@@ -1,0 +1,8 @@
+# Development dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Include production dependencies
+-r requirements.txt
+
+# Code quality tools
+ruff>=0.1.0

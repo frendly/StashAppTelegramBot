@@ -28,12 +28,18 @@ env.bak/
 venv.bak/
 
 # IDE
-.vscode/
+# .vscode/ - commented out to allow workspace settings to be committed
+# Keep .vscode/settings.json for team consistency
+.vscode/launch.json
+.vscode/tasks.json
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
+
+# Ruff cache
+.ruff_cache/
 
 # Configuration
 config.yml

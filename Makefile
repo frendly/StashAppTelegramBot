@@ -1,5 +1,6 @@
 .PHONY: help build up down logs restart clean shell backup stats
 .PHONY: ghcr-login ghcr-build ghcr-push ghcr-pull ghcr-up
+.PHONY: install-dev lint format check
 
 # Конфигурация для GitHub Container Registry
 REGISTRY = ghcr.io
@@ -12,15 +13,21 @@ help:
 	@echo "StashApp Telegram Bot - Команды управления"
 	@echo ""
 	@echo "Локальная разработка:"
-	@echo "  make build    - Собрать Docker образ локально"
-	@echo "  make up       - Запустить бот (локальная сборка)"
-	@echo "  make down     - Остановить бот"
-	@echo "  make logs     - Просмотр логов"
-	@echo "  make restart  - Перезапустить бот"
-	@echo "  make clean    - Очистка (остановка + удаление volumes)"
-	@echo "  make shell    - Зайти в контейнер"
-	@echo "  make backup   - Создать резервную копию БД"
-	@echo "  make stats    - Показать статистику из БД"
+	@echo "  make build       - Собрать Docker образ локально"
+	@echo "  make up          - Запустить бот (локальная сборка)"
+	@echo "  make down        - Остановить бот"
+	@echo "  make logs        - Просмотр логов"
+	@echo "  make restart     - Перезапустить бот"
+	@echo "  make clean       - Очистка (остановка + удаление volumes)"
+	@echo "  make shell       - Зайти в контейнер"
+	@echo "  make backup      - Создать резервную копию БД"
+	@echo "  make stats       - Показать статистику из БД"
+	@echo ""
+	@echo "Разработка и качество кода:"
+	@echo "  make install-dev - Установить dev-зависимости (ruff)"
+	@echo "  make lint        - Проверить код линтером"
+	@echo "  make format      - Автоформатирование кода"
+	@echo "  make check       - Проверить форматирование (без изменений)"
 	@echo ""
 	@echo "GitHub Container Registry:"
 	@echo "  make ghcr-login      - Авторизация в GHCR"
@@ -102,3 +109,25 @@ ghcr-up:
 	docker-compose -f docker-compose.ghcr.tmp.yml up -d
 	@rm -f docker-compose.ghcr.tmp.yml
 	@echo "✅ Бот запущен из образа GHCR"
+
+# Команды для разработки и качества кода
+install-dev:
+	@echo "Установка dev-зависимостей..."
+	pip install -r requirements-dev.txt
+	@echo "✅ Dev-зависимости установлены"
+
+lint:
+	@echo "Проверка кода линтером..."
+	ruff check bot/
+	@echo "✅ Проверка завершена"
+
+format:
+	@echo "Форматирование кода..."
+	ruff format bot/
+	@echo "✅ Код отформатирован"
+
+check:
+	@echo "Проверка форматирования (без изменений)..."
+	ruff check bot/
+	ruff format --check bot/
+	@echo "✅ Проверка завершена"
