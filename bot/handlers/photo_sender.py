@@ -32,7 +32,7 @@ class PhotoSender:
         database: Database,
         image_selector: ImageSelector,
         caption_formatter: CaptionFormatter,
-        voting_manager: Optional['VotingManager'] = None
+        voting_manager: Optional['VotingManager'] = None,
         application=None,
         last_sent_images: Optional[Dict[int, StashImage]] = None,
         last_sent_image_id: Optional[Dict[int, str]] = None
