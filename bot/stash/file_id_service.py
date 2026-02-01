@@ -102,6 +102,7 @@ class FileIdService:
           findImages(
             image_filter: {
               details: {
+                value: ""
                 modifier: NOT_NULL
               }
             }
@@ -140,6 +141,7 @@ class FileIdService:
           findImages(
             image_filter: {
               details: {
+                value: ""
                 modifier: IS_NULL
               }
             }
@@ -211,6 +213,7 @@ class FileIdService:
           findImages(
             image_filter: {
               details: {
+                value: ""
                 modifier: NOT_NULL
               }
             }
@@ -281,6 +284,7 @@ class FileIdService:
           findImages(
             image_filter: {
               details: {
+                value: ""
                 modifier: NOT_NULL
               }
             }
