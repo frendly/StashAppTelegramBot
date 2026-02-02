@@ -82,7 +82,10 @@ class FileIdService:
             image = data.get("findImage")
             if image:
                 # details содержит telegram_file_id (просто строка)
-                return image.get("details")
+                details = (
+                    image.get("details", "").strip() if image.get("details") else ""
+                )
+                return details if details else None
             return None
         except Exception as e:
             logger.error(
@@ -95,15 +98,15 @@ class FileIdService:
         Получение размера кеша (количество изображений с telegram_file_id).
 
         Returns:
-            int: Количество изображений в кеше
+            int: Количество изображений в кеше (только с непустым details)
         """
         query = """
         query GetCacheSize {
           findImages(
             image_filter: {
               details: {
-                value: ""
-                modifier: NOT_NULL
+                value: "."
+                modifier: MATCHES_REGEX
               }
             }
             filter: { per_page: 1 }
@@ -204,7 +207,7 @@ class FileIdService:
             exclude_ids: Список ID изображений для исключения
 
         Returns:
-            List[StashImage]: Список изображений
+            List[StashImage]: Список изображений (только с непустым details)
         """
         exclude_ids = exclude_ids or []
 
@@ -213,8 +216,8 @@ class FileIdService:
           findImages(
             image_filter: {
               details: {
-                value: ""
-                modifier: NOT_NULL
+                value: "."
+                modifier: MATCHES_REGEX
               }
             }
             filter: { per_page: $per_page, sort: "random" }
@@ -255,7 +258,7 @@ class FileIdService:
                     img for img in images_data if img["id"] not in exclude_set
                 ]
 
-            # Возвращаем нужное количество
+            # MATCHES_REGEX уже отфильтровал пустые строки на сервере
             result = []
             for img_data in images_data[:count]:
                 result.append(StashImage(img_data))
@@ -284,8 +287,8 @@ class FileIdService:
           findImages(
             image_filter: {
               details: {
-                value: ""
-                modifier: NOT_NULL
+                value: "."
+                modifier: MATCHES_REGEX
               }
             }
             filter: { per_page: $per_page, sort: "random" }
@@ -320,6 +323,9 @@ class FileIdService:
             images_data = data.get("findImages", {}).get("images", [])
 
             if not images_data:
+                logger.warning(
+                    "get_random_image_from_cache: запрос вернул 0 изображений"
+                )
                 return None
 
             # Фильтруем по exclude_ids
@@ -330,9 +336,14 @@ class FileIdService:
                 ]
 
             if not images_data:
+                logger.warning(
+                    f"get_random_image_from_cache: все изображения в exclude_ids "
+                    f"(exclude_ids count: {len(exclude_ids)})"
+                )
                 return None
 
-            # Возвращаем первое подходящее изображение
+            # MATCHES_REGEX уже отфильтровал пустые строки на сервере,
+            # поэтому просто возвращаем первое подходящее изображение
             return StashImage(images_data[0])
         except Exception as e:
             logger.error(f"Ошибка при получении случайного изображения из кеша: {e}")
