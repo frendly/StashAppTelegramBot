@@ -32,6 +32,7 @@ User ──→ Telegram Bot ──→ TelegramHandler (Facade) ←── Schedul
          └── CaptionFormatter  ├── ImageService
                                ├── GalleryService
                                ├── RatingService
+                               ├── FileIdService
                                └── StashGraphQLClient
                  ↓
            VotingManager
@@ -56,6 +57,7 @@ User ──→ Telegram Bot ──→ TelegramHandler (Facade) ←── Schedul
 | `stash/image_service.py` | Image operations | `get_random_image()`, `get_random_image_weighted()` |
 | `stash/gallery_service.py` | Gallery operations | `get_all_galleries()`, `get_gallery_image_count()` |
 | `stash/rating_service.py` | Rating operations | `update_image_rating()`, `update_gallery_rating()` |
+| `stash/file_id_service.py` | File ID caching | `save_telegram_file_id()`, `get_telegram_file_id()`, `get_cache_size()` |
 | `stash/selection.py` | Gallery selection | `select_gallery_by_weight()` |
 | `database/` | SQLite DB (repositories) | `add_vote()`, `get_recent_image_ids()`, `update_performer_preference()` |
 | `scheduler.py` | Cron scheduler | `start()`, `stop()` |
@@ -162,6 +164,7 @@ score = (positive_votes - negative_votes) / total_votes
    - Telegram file_id saved to DB after first send
    - Reuse file_id for subsequent sends (no download needed)
    - Separate cache for thumbnail and high-quality images
+   - Optional: migrate file_id from DB to StashApp (custom field telegram_file_id)
    - Saves download time (~1-2 sec per image)
 
 7. **Service channel preloading**
@@ -201,11 +204,11 @@ score = (positive_votes - negative_votes) / total_votes
 
 ```sql
 -- Sent photos history
-sent_photos(id, image_id, sent_at, user_id, title)
+sent_photos(id, image_id, sent_at, user_id, title, file_id, file_id_high_quality)
 
 -- User votes
-votes(id, image_id, user_id, vote, voted_at, gallery_id, performer_ids)
-UNIQUE(image_id, user_id)
+votes(id, image_id, vote, voted_at, gallery_id, gallery_title, performer_ids, performer_names)
+UNIQUE(image_id)
 
 -- Performer preferences
 performer_preferences(performer_id, performer_name, positive_votes,
@@ -215,12 +218,15 @@ performer_preferences(performer_id, performer_name, positive_votes,
 gallery_preferences(gallery_id, gallery_title, positive_votes,
                    negative_votes, total_votes, score, rating_set, updated_at,
                    weight, excluded, excluded_at, threshold_notification_shown,
-                   total_images, images_count_updated_at)
+                   total_images, images_count_updated_at, last_selected_at)
 ```
 
 ### Indexes
 - `idx_image_id` on `sent_photos(image_id)`
 - `idx_sent_at` on `sent_photos(sent_at)`
+- `idx_sent_photos_file_id` on `sent_photos(file_id)`
+- `idx_sent_photos_file_id_high_quality` on `sent_photos(file_id_high_quality)`
+- `idx_votes_image_id` on `votes(image_id)`
 - `idx_gallery_weight` on `gallery_preferences(weight)`
 
 ### Database Structure
@@ -274,6 +280,43 @@ async def my_function():
 **File:** `bot/voting.py`
 **Method:** `process_vote()`
 **Updates:** photo rating, votes table, performer/gallery preferences
+
+### Update Version
+Project uses [Semantic Versioning](https://semver.org/) (MAJOR.MINOR.PATCH).
+
+**When to update version:**
+- **PATCH** (1.0.0 → 1.0.1): Bug fixes, non-breaking API changes
+- **MINOR** (1.0.0 → 1.1.0): New features, backward compatible changes
+- **MAJOR** (1.0.0 → 2.0.0): Breaking API changes
+
+**Where to update version:**
+1. **`bot/__init__.py`** - main version storage:
+   ```python
+   __version__ = "1.1.0"  # Update here
+   ```
+2. **`CHANGELOG.md`** - add new section with date and change description
+3. **`pyproject.toml`** (optional) - can be added to `[project]` section:
+   ```toml
+   [project]
+   version = "1.1.0"
+   ```
+
+**Release process:**
+1. Update version in `bot/__init__.py`
+2. Update `CHANGELOG.md` (add date, describe changes)
+3. Commit changes: `git commit -m "Bump version to 1.1.0"`
+4. Create git tag: `git tag -a v1.1.0 -m "Release version 1.1.0"`
+5. (Optional) Build Docker image with version: `make ghcr-build TAG=v1.1.0 && make ghcr-push TAG=v1.1.0`
+
+**⚠️ Important:** After creating the tag, manually push code and tag:
+```bash
+git push origin <branch-name>    # Push code changes
+git push origin v1.1.0           # Push tag
+```
+
+**After release:**
+- Create `[Unreleased]` section in `CHANGELOG.md` for future changes
+- Update version at the end of `CURSOR.md` (document metadata, not critical)
 
 ---
 
@@ -338,6 +381,7 @@ bot/
 │   ├── image_service.py      # Image operations
 │   ├── gallery_service.py    # Gallery operations
 │   ├── rating_service.py     # Rating operations
+│   ├── file_id_service.py    # File ID caching service
 │   ├── selection.py          # Gallery selection
 │   ├── metrics.py            # Category metrics
 │   └── models.py             # Data models
@@ -493,6 +537,10 @@ history:
 
 database:
   path: "/data/sent_photos.db"
+
+cache:  # Optional: кеширование изображений
+  min_cache_size: 200  # Минимальный размер кеша
+  migrate_file_ids: false  # Миграция file_id из БД в StashApp при старте
 ```
 
 **Cron examples:**
@@ -510,6 +558,7 @@ aiohttp==3.9.1            # Async HTTP
 APScheduler==3.10.4       # Scheduler
 PyYAML==6.0.1             # YAML
 python-dotenv==1.0.0      # .env
+pytz>=2024.1              # Timezone support
 ```
 
 ---
@@ -558,7 +607,7 @@ python-dotenv==1.0.0      # .env
 
 ---
 
-**Version:** 1.2.0 (compact)
+**Version:** 1.1.0 (compact)
 **Date:** 2026-01-30
 **Status:** ✅ Production Ready
 **Last Updated:** 2026-01-30

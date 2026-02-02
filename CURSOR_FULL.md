@@ -80,6 +80,7 @@ graph TB
             ImageService[image_service.py]
             GalleryService[gallery_service.py]
             RatingService[rating_service.py]
+            FileIdService[file_id_service.py]
             Selection[selection.py]
         end
     end
@@ -105,9 +106,11 @@ graph TB
     StashClient --> ImageService
     StashClient --> GalleryService
     StashClient --> RatingService
+    StashClient --> FileIdService
     ImageService --> GraphQLClient
     GalleryService --> GraphQLClient
     RatingService --> GraphQLClient
+    FileIdService --> GraphQLClient
     GraphQLClient -->|GraphQL| StashApp
     PhotoSender -->|send photos| TelegramAPI
 
@@ -182,12 +185,18 @@ class DatabaseConfig:
     path: str
 
 @dataclass
+class CacheConfig:
+    min_cache_size: int = 200  # Минимальный размер кеша
+    migrate_file_ids: bool = False  # Миграция file_id из БД в StashApp при старте
+
+@dataclass
 class BotConfig:
     telegram: TelegramConfig
     stash: StashConfig
     scheduler: SchedulerConfig
     history: HistoryConfig
     database: DatabaseConfig
+    cache: Optional[CacheConfig] = None  # Опционально: кеширование изображений
 ```
 
 #### 3. `bot/database/` - Работа с базой данных (модульная структура)
@@ -321,6 +330,7 @@ class StashClient:
         self._image_service = ImageService(...)
         self._gallery_service = GalleryService(...)
         self._rating_service = RatingService(...)
+        self._file_id_service = FileIdService(...)
 
     # Делегирование методов
     async def get_random_image() -> StashImage:
@@ -350,6 +360,9 @@ class StashClient:
     async def download_image()             # Делегирует StashGraphQLClient
     async def update_image_rating()       # Делегирует RatingService
     async def update_gallery_rating()      # Делегирует RatingService
+    async def save_telegram_file_id()      # Делегирует FileIdService
+    async def get_telegram_file_id()       # Делегирует FileIdService
+    async def get_cache_size()             # Делегирует FileIdService
 ```
 
 #### 4.1. `bot/stash/` - Сервисы StashApp API
@@ -359,6 +372,7 @@ class StashClient:
 - `stash/image_service.py` - `ImageService` - операции с изображениями
 - `stash/gallery_service.py` - `GalleryService` - операции с галереями
 - `stash/rating_service.py` - `RatingService` - операции с рейтингами
+- `stash/file_id_service.py` - `FileIdService` - кэширование file_id в StashApp
 - `stash/selection.py` - `select_gallery_by_weight()` - взвешенный выбор галереи
 - `stash/metrics.py` - `CategoryMetrics` - метрики распределения категорий
 - `stash/models.py` - `StashImage` - модель данных
@@ -1042,11 +1056,13 @@ class StashImage:
 - Сохранение `file_id` и `file_id_high_quality` в БД после первой отправки
 - Повторное использование `file_id` вместо загрузки файла
 - Предзагрузка изображений в служебный канал для получения `file_id_high_quality`
+- Опциональная миграция `file_id` из БД в StashApp (кастомное поле `telegram_file_id`)
 
 **Эффект:**
 - Мгновенная отправка при повторном использовании изображения
 - Экономия трафика и времени загрузки
 - Автоматическая предзагрузка 2 изображений каждую минуту (если `cache_channel_id` настроен)
+- Централизованное хранение `file_id` в StashApp (если миграция включена)
 
 #### 4. Предзагрузка следующего изображения
 
@@ -1185,6 +1201,10 @@ history:
 
 database:
   path: "/data/sent_photos.db"
+
+cache:  # Опционально: кеширование изображений
+  min_cache_size: 200  # Минимальный размер кеша
+  migrate_file_ids: false  # Миграция file_id из БД в StashApp при старте
 ```
 
 ### 3. Запуск через Docker (рекомендуется)
@@ -1287,6 +1307,7 @@ stash-telegram-bot/
 │   │   ├── image_service.py     # Операции с изображениями
 │   │   ├── gallery_service.py   # Операции с галереями
 │   │   ├── rating_service.py    # Операции с рейтингами
+│   │   ├── file_id_service.py   # Кэширование file_id в StashApp
 │   │   ├── selection.py          # Взвешенный выбор галереи
 │   │   ├── metrics.py            # Метрики категорий
 │   │   └── models.py             # Модели данных
@@ -1394,6 +1415,13 @@ class RatingService:  # rating_service.py
     async def update_image_rating()
     async def update_gallery_rating()
 
+class FileIdService:  # file_id_service.py
+    async def save_telegram_file_id()
+    async def get_telegram_file_id()
+    async def get_cache_size()
+    async def get_images_without_file_id()
+    async def get_images_with_file_id()
+
 # bot/telegram_handler.py (Фасад)
 class TelegramHandler:
     # Делегирует методы обработчикам:
@@ -1446,6 +1474,7 @@ aiohttp==3.9.1            # Async HTTP client
 APScheduler==3.10.4       # Планировщик задач
 PyYAML==6.0.1             # YAML конфигурация
 python-dotenv==1.0.0      # .env поддержка
+pytz>=2024.1              # Timezone support
 ```
 
 ### Конфигурационные файлы
@@ -1499,16 +1528,18 @@ python-dotenv==1.0.0      # .env поддержка
 
 ## Версия документа
 
-**Версия:** 1.2.0
+**Версия:** 1.0.0
 **Дата:** 2026-01-30
 **Автор:** Консолидация из ARCHITECTURE.md, VOTING_SYSTEM.md, PERFORMANCE_ANALYSIS.md
 
 **Статус:** ✅ Production Ready
 
-**Изменения в версии 1.2.0:**
+**Изменения в версии 1.0.0:**
 - Рефакторинг архитектуры: введены фасады (`telegram_handler.py`, `stash_client.py`)
 - Модульная структура: выделены специализированные обработчики (`handlers/`) и сервисы (`stash/`)
 - Улучшена разделяемость ответственности и тестируемость кода
+- Добавлен FileIdService для кэширования file_id в StashApp
+- Добавлена поддержка миграции file_id из БД в StashApp
 
 ---
 
