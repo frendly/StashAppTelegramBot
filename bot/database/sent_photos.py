@@ -54,7 +54,10 @@ class SentPhotosRepository:
 
     def get_recent_image_ids(self, days: int) -> list[str]:
         """
-        Получение списка ID изображений, отправленных за последние N дней.
+        Получение списка ID изображений, отправленных пользователям за последние N дней.
+
+        ВАЖНО: Учитываются только записи с user_id (отправленные пользователям),
+        предзагрузка в служебный канал не учитывается.
 
         Args:
             days: Количество дней
@@ -72,6 +75,7 @@ class SentPhotosRepository:
                 SELECT DISTINCT image_id
                 FROM sent_photos
                 WHERE sent_at >= ?
+                  AND user_id IS NOT NULL
             """,
                 (cutoff_date,),
             )
@@ -81,20 +85,23 @@ class SentPhotosRepository:
 
             duration = time.perf_counter() - start_time
             logger.debug(
-                f"⏱️  DB get_recent_image_ids: {duration:.3f}s ({len(image_ids)} items, {days} days)"
+                f"⏱️  DB get_recent_image_ids: {duration:.3f}s ({len(image_ids)} items, {days} days, only user_id IS NOT NULL)"
             )
             return image_ids
 
     def is_recently_sent(self, image_id: str, days: int) -> bool:
         """
-        Проверка, было ли изображение отправлено недавно.
+        Проверка, было ли изображение отправлено пользователю недавно.
+
+        ВАЖНО: Учитываются только записи с user_id (отправленные пользователям),
+        предзагрузка в служебный канал не учитывается.
 
         Args:
             image_id: ID изображения
             days: Количество дней для проверки
 
         Returns:
-            bool: True если изображение было отправлено за последние N дней
+            bool: True если изображение было отправлено пользователю за последние N дней
         """
         recent_ids = self.get_recent_image_ids(days)
         return image_id in recent_ids
