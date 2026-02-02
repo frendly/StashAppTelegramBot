@@ -491,3 +491,51 @@ class PreferencesRepository:
                 logger.debug(f"Галерея {gallery_id} уже существует в базе")
 
             return gallery_created
+
+    def exclude_gallery(self, gallery_id: str) -> bool:
+        """
+        Исключение галереи из ротации.
+
+        Args:
+            gallery_id: ID галереи
+
+        Returns:
+            bool: True если операция успешна, False если галерея не найдена
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # Проверяем, существует ли галерея
+            cursor.execute(
+                """
+                SELECT gallery_title, weight
+                FROM gallery_preferences
+                WHERE gallery_id = ?
+            """,
+                (gallery_id,),
+            )
+
+            result = cursor.fetchone()
+            if not result:
+                logger.warning(f"Галерея {gallery_id} не найдена для исключения")
+                return False
+
+            gallery_title = result[0]
+            weight = result[1]
+
+            # Устанавливаем excluded = TRUE и excluded_at = CURRENT_TIMESTAMP
+            cursor.execute(
+                """
+                UPDATE gallery_preferences
+                SET excluded = TRUE, excluded_at = CURRENT_TIMESTAMP
+                WHERE gallery_id = ?
+            """,
+                (gallery_id,),
+            )
+
+            conn.commit()
+            logger.info(
+                f"Галерея '{gallery_title}' (ID: {gallery_id}) исключена из ротации. "
+                f"Вес сохранен: {weight:.3f}"
+            )
+            return True

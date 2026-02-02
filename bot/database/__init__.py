@@ -78,6 +78,7 @@ class Database(DatabaseBase):
             self.preferences_repo.mark_threshold_notification_shown
         )
         self.ensure_gallery_exists = self.preferences_repo.ensure_gallery_exists
+        self.exclude_gallery = self.preferences_repo.exclude_gallery
 
         # Weights methods
         self.calculate_initial_weight = self.weights_repo.calculate_initial_weight

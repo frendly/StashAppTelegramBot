@@ -240,6 +240,12 @@ class TelegramHandler:
         """Обработчик callback для уже проголосованных кнопок."""
         await self.vote_handler.handle_voted_callback(update, context)
 
+    async def handle_exclude_gallery_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Обработчик callback для исключения галереи."""
+        await self.vote_handler.handle_exclude_gallery_callback(update, context)
+
     def setup_handlers(self, application: Application):
         """
         Настройка обработчиков команд.
@@ -273,6 +279,11 @@ class TelegramHandler:
         )
         application.add_handler(
             CallbackQueryHandler(self.handle_voted_callback, pattern=r"^voted_")
+        )
+        application.add_handler(
+            CallbackQueryHandler(
+                self.handle_exclude_gallery_callback, pattern=r"^exclude_gallery_"
+            )
         )
 
         logger.info("Обработчики команд настроены")

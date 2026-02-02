@@ -1,6 +1,7 @@
 """Сервис для работы с telegram_file_id в StashApp."""
 
 import logging
+from typing import Any
 
 from .client import StashGraphQLClient
 from .models import StashImage
@@ -11,14 +12,18 @@ logger = logging.getLogger(__name__)
 class FileIdService:
     """Сервис для сохранения и получения telegram_file_id из StashApp."""
 
-    def __init__(self, client: StashGraphQLClient):
+    def __init__(self, client: StashGraphQLClient, gallery_service=None):
         """
         Инициализация сервиса.
 
         Args:
             client: Базовый GraphQL клиент
+            gallery_service: Опциональный GalleryService для получения ID тега (для синхронизации кэша)
         """
         self.client = client
+        self._gallery_service = gallery_service
+        # Кэш для ID тега exclude_gallery (используется только если gallery_service не передан)
+        self._exclude_tag_id: str | None = None
 
     async def save_telegram_file_id(self, image_id: str, file_id: str) -> bool:
         """
@@ -93,6 +98,91 @@ class FileIdService:
             )
             return None
 
+    async def _get_exclude_tag_id(self) -> str | None:
+        """
+        Получить ID тега exclude_gallery (с кэшированием).
+
+        Returns:
+            Optional[str]: ID тега или None при ошибке
+        """
+        # Если передан gallery_service, используем его (единый кэш)
+        if self._gallery_service:
+            tag_id = await self._gallery_service.get_exclude_tag_id()
+            if tag_id:
+                return tag_id
+            logger.warning(
+                "Не удалось получить ID тега exclude_gallery через GalleryService"
+            )
+            return None
+
+        # Fallback: используем локальный кэш и запросы
+        if self._exclude_tag_id:
+            return self._exclude_tag_id
+
+        # Ищем тег
+        query = """
+        query FindTag($name: String!) {
+          findTags(
+            tag_filter: {
+              name: {
+                value: $name
+                modifier: EQUALS
+              }
+            }
+            filter: { per_page: 1 }
+          ) {
+            tags {
+              id
+              name
+            }
+          }
+        }
+        """
+
+        variables = {"name": "exclude_gallery"}
+
+        try:
+            data = await self.client.execute_query(query, variables)
+            tags = data.get("findTags", {}).get("tags", [])
+
+            if tags:
+                tag_id = tags[0]["id"]
+                self._exclude_tag_id = tag_id
+                logger.debug(f"Найден тег exclude_gallery с ID {tag_id}")
+                return tag_id
+
+            # Если тег не найден, создаем его
+            mutation = """
+            mutation TagCreate($name: String!) {
+              tagCreate(input: { name: $name }) {
+                id
+                name
+              }
+            }
+            """
+
+            data = await self.client.execute_query(mutation, variables)
+            tag = data.get("tagCreate")
+
+            if tag:
+                tag_id = tag["id"]
+                self._exclude_tag_id = tag_id
+                logger.info(f"Создан тег exclude_gallery с ID {tag_id}")
+                return tag_id
+
+            logger.warning(
+                "Не удалось найти или создать тег exclude_gallery. "
+                "Фильтрация по исключенным галереям не будет применяться."
+            )
+            return None
+
+        except Exception as e:
+            logger.error(
+                f"Ошибка при получении ID тега exclude_gallery: {e}. "
+                "Фильтрация по исключенным галереям не будет применяться."
+            )
+            return None
+
     async def get_cache_size(self) -> int:
         """
         Получение размера кеша (количество изображений с telegram_file_id).
@@ -139,15 +229,30 @@ class FileIdService:
         """
         exclude_ids = exclude_ids or []
 
-        query = """
-        query FindImagesWithoutFileId($per_page: Int!) {
-          findImages(
-            image_filter: {
-              details: {
-                value: ""
-                modifier: IS_NULL
-              }
+        # Получаем ID тега exclude_gallery для фильтрации
+        exclude_tag_id = await self._get_exclude_tag_id()
+
+        # Формируем фильтр изображений
+        image_filter: dict[str, Any] = {
+            "details": {
+                "value": "",
+                "modifier": "IS_NULL",
             }
+        }
+
+        # Добавляем фильтр по тегу галереи, если тег найден
+        if exclude_tag_id:
+            image_filter["galleries_filter"] = {
+                "tags": {
+                    "value": [exclude_tag_id],
+                    "modifier": "EXCLUDES",
+                }
+            }
+
+        query = """
+        query FindImagesWithoutFileId($per_page: Int!, $image_filter: ImageFilterType!) {
+          findImages(
+            image_filter: $image_filter
             filter: { per_page: $per_page, sort: "random" }
           ) {
             images {
@@ -173,7 +278,10 @@ class FileIdService:
         }
         """
 
-        variables = {"per_page": min(count * 2, 100)}  # Берем больше для фильтрации
+        variables = {
+            "per_page": min(count * 2, 100),  # Берем больше для фильтрации
+            "image_filter": image_filter,
+        }
 
         try:
             data = await self.client.execute_query(query, variables)
@@ -211,15 +319,30 @@ class FileIdService:
         """
         exclude_ids = exclude_ids or []
 
-        query = """
-        query FindImagesWithFileId($per_page: Int!) {
-          findImages(
-            image_filter: {
-              details: {
-                value: "."
-                modifier: MATCHES_REGEX
-              }
+        # Получаем ID тега exclude_gallery для фильтрации
+        exclude_tag_id = await self._get_exclude_tag_id()
+
+        # Формируем фильтр изображений
+        image_filter: dict[str, Any] = {
+            "details": {
+                "value": ".",
+                "modifier": "MATCHES_REGEX",
             }
+        }
+
+        # Добавляем фильтр по тегу галереи, если тег найден
+        if exclude_tag_id:
+            image_filter["galleries_filter"] = {
+                "tags": {
+                    "value": [exclude_tag_id],
+                    "modifier": "EXCLUDES",
+                }
+            }
+
+        query = """
+        query FindImagesWithFileId($per_page: Int!, $image_filter: ImageFilterType!) {
+          findImages(
+            image_filter: $image_filter
             filter: { per_page: $per_page, sort: "random" }
           ) {
             images {
@@ -245,7 +368,10 @@ class FileIdService:
         }
         """
 
-        variables = {"per_page": min(count * 2, 100)}  # Берем больше для фильтрации
+        variables = {
+            "per_page": min(count * 2, 100),  # Берем больше для фильтрации
+            "image_filter": image_filter,
+        }
 
         try:
             data = await self.client.execute_query(query, variables)
@@ -282,15 +408,30 @@ class FileIdService:
         """
         exclude_ids = exclude_ids or []
 
-        query = """
-        query FindRandomCachedImage($per_page: Int!) {
-          findImages(
-            image_filter: {
-              details: {
-                value: "."
-                modifier: MATCHES_REGEX
-              }
+        # Получаем ID тега exclude_gallery для фильтрации
+        exclude_tag_id = await self._get_exclude_tag_id()
+
+        # Формируем фильтр изображений
+        image_filter: dict[str, Any] = {
+            "details": {
+                "value": ".",
+                "modifier": "MATCHES_REGEX",
             }
+        }
+
+        # Добавляем фильтр по тегу галереи, если тег найден
+        if exclude_tag_id:
+            image_filter["galleries_filter"] = {
+                "tags": {
+                    "value": [exclude_tag_id],
+                    "modifier": "EXCLUDES",
+                }
+            }
+
+        query = """
+        query FindRandomCachedImage($per_page: Int!, $image_filter: ImageFilterType!) {
+          findImages(
+            image_filter: $image_filter
             filter: { per_page: $per_page, sort: "random" }
           ) {
             images {
@@ -316,7 +457,10 @@ class FileIdService:
         }
         """
 
-        variables = {"per_page": 20}
+        variables = {
+            "per_page": 20,
+            "image_filter": image_filter,
+        }
 
         try:
             data = await self.client.execute_query(query, variables)

@@ -39,10 +39,12 @@ class StashClient:
         self._category_metrics = CategoryMetrics()
 
         # Создаем сервисы
-        self._image_service = ImageService(self._client, self._category_metrics)
+        self._image_service = ImageService(
+            self._client, self._category_metrics, self._gallery_service
+        )
         self._gallery_service = GalleryService(self._client)
         self._rating_service = RatingService(self._client)
-        self._file_id_service = FileIdService(self._client)
+        self._file_id_service = FileIdService(self._client, self._gallery_service)
 
         # Сохраняем для обратной совместимости
         self.api_url = api_url
@@ -146,6 +148,14 @@ class StashClient:
     async def get_gallery_image_count(self, gallery_id: str) -> int | None:
         """Получение количества изображений в галерее."""
         return await self._gallery_service.get_gallery_image_count(gallery_id)
+
+    async def add_tag_to_gallery(self, gallery_id: str, tag_name: str) -> bool:
+        """Добавление тега к галерее."""
+        return await self._gallery_service.add_tag_to_gallery(gallery_id, tag_name)
+
+    async def get_exclude_tag_id(self) -> str | None:
+        """Получение ID тега exclude_gallery (с кэшированием)."""
+        return await self._gallery_service.get_exclude_tag_id()
 
     # Делегирование методов RatingService
     async def update_image_rating(self, image_id: str, rating: int) -> bool:

@@ -14,16 +14,22 @@ logger = logging.getLogger(__name__)
 class ImageService:
     """Сервис для работы с изображениями из StashApp."""
 
-    def __init__(self, client: StashGraphQLClient, category_metrics=None):
+    def __init__(
+        self, client: StashGraphQLClient, category_metrics=None, gallery_service=None
+    ):
         """
         Инициализация сервиса.
 
         Args:
             client: Базовый GraphQL клиент
             category_metrics: Опциональный объект CategoryMetrics для отслеживания метрик
+            gallery_service: Опциональный GalleryService для получения ID тега (для синхронизации кэша)
         """
         self.client = client
         self.category_metrics = category_metrics
+        self._gallery_service = gallery_service
+        # Кэш для ID тега exclude_gallery (используется только если gallery_service не передан)
+        self._exclude_tag_id: str | None = None
 
     async def get_random_image(
         self, exclude_ids: list[str] | None = None
@@ -39,11 +45,28 @@ class ImageService:
         """
         start_time = time.perf_counter()
 
+        # Получаем ID тега exclude_gallery для фильтрации
+        exclude_tag_id = await self._get_exclude_tag_id()
+
+        # Формируем фильтр изображений
+        image_filter: dict[str, Any] = {}
+
+        # Добавляем фильтр по тегу галереи, если тег найден
+        if exclude_tag_id:
+            image_filter["galleries_filter"] = {
+                "tags": {
+                    "value": [exclude_tag_id],
+                    "modifier": "EXCLUDES",
+                }
+            }
+
         # Запрос с thumbnail для оптимизации скорости загрузки
         # Уменьшено до 20 изображений и убраны теги для ускорения
+        # Всегда используем image_filter (пустой словарь, если фильтр не нужен)
         query = """
-        query FindRandomImage {
+        query FindRandomImage($image_filter: ImageFilterType!) {
           findImages(
+            image_filter: $image_filter
             filter: { per_page: 20, sort: "random" }
           ) {
             images {
@@ -71,7 +94,8 @@ class ImageService:
 
         try:
             query_start = time.perf_counter()
-            data = await self.client.execute_query(query)
+            variables = {"image_filter": image_filter}
+            data = await self.client.execute_query(query, variables)
             query_duration = time.perf_counter() - query_start
 
             images = data.get("findImages", {}).get("images", [])
@@ -111,6 +135,91 @@ class ImageService:
         except Exception as e:
             duration = time.perf_counter() - start_time
             logger.error(f"⏱️  get_random_image failed after {duration:.3f}s: {e}")
+            return None
+
+    async def _get_exclude_tag_id(self) -> str | None:
+        """
+        Получить ID тега exclude_gallery (с кэшированием).
+
+        Returns:
+            Optional[str]: ID тега или None при ошибке
+        """
+        # Если передан gallery_service, используем его (единый кэш)
+        if self._gallery_service:
+            tag_id = await self._gallery_service.get_exclude_tag_id()
+            if tag_id:
+                return tag_id
+            logger.warning(
+                "Не удалось получить ID тега exclude_gallery через GalleryService"
+            )
+            return None
+
+        # Fallback: используем локальный кэш и запросы
+        if self._exclude_tag_id:
+            return self._exclude_tag_id
+
+        # Ищем тег
+        query = """
+        query FindTag($name: String!) {
+          findTags(
+            tag_filter: {
+              name: {
+                value: $name
+                modifier: EQUALS
+              }
+            }
+            filter: { per_page: 1 }
+          ) {
+            tags {
+              id
+              name
+            }
+          }
+        }
+        """
+
+        variables = {"name": "exclude_gallery"}
+
+        try:
+            data = await self.client.execute_query(query, variables)
+            tags = data.get("findTags", {}).get("tags", [])
+
+            if tags:
+                tag_id = tags[0]["id"]
+                self._exclude_tag_id = tag_id
+                logger.debug(f"Найден тег exclude_gallery с ID {tag_id}")
+                return tag_id
+
+            # Если тег не найден, создаем его
+            mutation = """
+            mutation TagCreate($name: String!) {
+              tagCreate(input: { name: $name }) {
+                id
+                name
+              }
+            }
+            """
+
+            data = await self.client.execute_query(mutation, variables)
+            tag = data.get("tagCreate")
+
+            if tag:
+                tag_id = tag["id"]
+                self._exclude_tag_id = tag_id
+                logger.info(f"Создан тег exclude_gallery с ID {tag_id}")
+                return tag_id
+
+            logger.warning(
+                "Не удалось найти или создать тег exclude_gallery. "
+                "Фильтрация по исключенным галереям не будет применяться."
+            )
+            return None
+
+        except Exception as e:
+            logger.error(
+                f"Ошибка при получении ID тега exclude_gallery: {e}. "
+                "Фильтрация по исключенным галереям не будет применяться."
+            )
             return None
 
     async def get_random_image_with_retry(
