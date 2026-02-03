@@ -18,6 +18,29 @@ telegram:
   # Если не указан, предзагрузка отключена
   # cache_channel_id: -1001234567890
 
+  # Настройки webhook (опционально)
+  # Если включено, бот будет работать в режиме webhook вместо polling.
+  # Рекомендуется использовать вместе с reverse proxy/роутером, который терминирует HTTPS.
+  webhook:
+    enabled: false  # true для webhook, false для polling
+
+    # Полный URL, по которому Telegram будет отправлять обновления.
+    # Например, если вы настроили KeenDNS/домен и проксирование:
+    #   https://yourdomain.keenetic.pro/webhook
+    url: "https://yourdomain.keenetic.pro/webhook"
+
+    # Внутренний порт, на котором бот слушает HTTP внутри контейнера/хоста.
+    # Роутер/reverse proxy должен проксировать HTTPS:443 -> этот порт.
+    port: 8443
+
+    # Секретный токен для защиты от подделки запросов (опционально, но рекомендуется).
+    # Должен быть сконфигурирован как X-Telegram-Bot-Api-Secret-Token на стороне прокси/роутера.
+    secret_token: ""
+
+    # Адрес, на котором HTTP-сервер бота слушает внутри контейнера/хоста.
+    # 0.0.0.0 означает "слушать на всех интерфейсах".
+    listen_address: "0.0.0.0"
+
 stash:
   # URL StashApp GraphQL API
   # Для Docker: http://stash:9999/graphql (если в одной сети)

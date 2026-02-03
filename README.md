@@ -59,7 +59,36 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-### 4. Запуск локально (для разработки)
+### 4. Режим webhook vs polling
+
+По умолчанию бот работает в режиме **polling** (сам опрашивает Telegram).
+Для продакшена удобнее использовать **webhook** c HTTPS на роутере/прокси.
+
+- **polling**:
+  - проще в настройке, не требует внешнего HTTPS
+  - достаточно проброса доступа к интернету из контейнера/хоста
+- **webhook**:
+  - Telegram шлёт обновления на ваш HTTPS URL
+  - требуется домен и валидный SSL (например, KeenDNS + Let's Encrypt на Keenetic)
+  - бот внутри контейнера слушает HTTP, SSL терминируется на роутере/прокси
+
+Включение webhook режима настраивается в `config.yml`:
+
+```yaml
+telegram:
+  # ...
+  webhook:
+    enabled: true
+    url: "https://yourdomain.keenetic.pro/webhook"
+    port: 8443
+    secret_token: "SOME_SECRET"  # опционально, но рекомендуется
+    listen_address: "0.0.0.0"
+```
+
+В `docker-compose.yml` порт 8443 внутри контейнера по умолчанию проброшен наружу,
+а переменная окружения `WEBHOOK_PORT` позволяет переопределить внешний порт при необходимости.
+
+### 5. Запуск локально (для разработки)
 
 ```bash
 # Создайте виртуальное окружение
@@ -105,6 +134,15 @@ history:
 
 database:
   path: "/data/sent_photos.db"
+
+telegram:
+  # ...
+  webhook:
+    enabled: false
+    url: "https://yourdomain.keenetic.pro/webhook"
+    port: 8443
+    secret_token: ""
+    listen_address: "0.0.0.0"
 ```
 
 ### Примеры cron расписаний

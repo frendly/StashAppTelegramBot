@@ -8,12 +8,24 @@ import yaml
 
 
 @dataclass
+class WebhookConfig:
+    """Конфигурация Webhook режима Telegram бота."""
+
+    enabled: bool
+    url: str | None
+    port: int = 8443
+    secret_token: str | None = None
+    listen_address: str = "0.0.0.0"
+
+
+@dataclass
 class TelegramConfig:
     """Конфигурация Telegram бота."""
 
     bot_token: str
     allowed_user_ids: list[int]
     cache_channel_id: int | None = None
+    webhook: WebhookConfig | None = None
 
 
 @dataclass
@@ -101,10 +113,23 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
         "password", ""
     )
 
+    telegram_webhook_data = config_data["telegram"].get("webhook")
+
+    telegram_webhook_config = None
+    if telegram_webhook_data:
+        telegram_webhook_config = WebhookConfig(
+            enabled=telegram_webhook_data.get("enabled", False),
+            url=telegram_webhook_data.get("url"),
+            port=telegram_webhook_data.get("port", 8443),
+            secret_token=telegram_webhook_data.get("secret_token") or None,
+            listen_address=telegram_webhook_data.get("listen_address", "0.0.0.0"),
+        )
+
     telegram_config = TelegramConfig(
         bot_token=telegram_token,
         allowed_user_ids=config_data["telegram"]["allowed_user_ids"],
         cache_channel_id=config_data["telegram"].get("cache_channel_id"),
+        webhook=telegram_webhook_config,
     )
 
     stash_config = StashConfig(
@@ -152,6 +177,13 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
 
     if cache_config.min_cache_size < 1:
         raise ValueError("❌ min_cache_size должен быть >= 1")
+
+    # Валидация webhook конфигурации
+    if telegram_config.webhook and telegram_config.webhook.enabled:
+        if not telegram_config.webhook.url:
+            raise ValueError(
+                "❌ Включен webhook режим, но не указан telegram.webhook.url"
+            )
 
     return BotConfig(
         telegram=telegram_config,

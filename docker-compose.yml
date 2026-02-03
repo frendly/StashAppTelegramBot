@@ -5,7 +5,7 @@ services:
     build: .
     container_name: stash-telegram-bot
     restart: unless-stopped
-    
+
     volumes:
       # Конфигурация
       - ./config.yml:/config/config.yml:ro
@@ -13,17 +13,25 @@ services:
       - ./data:/data
       # Логи (опционально)
       - ./logs:/app/logs
-    
+
     environment:
       # Переменные окружения (можно переопределить в .env файле)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - STASH_API_KEY=${STASH_API_KEY:-}
       - TZ=${TIMEZONE:-Europe/Moscow}
-    
+      # Внешний порт хоста для webhook. Внутри контейнера бот по умолчанию слушает 8443
+      # (значение telegram.webhook.port и правая часть в секции ports).
+      # WEBHOOK_PORT переопределяет внешний порт по умолчанию 8443.
+      - WEBHOOK_PORT=${WEBHOOK_PORT:-8443}
+
+    # Проброс порта для webhook (HTTP внутри контейнера, HTTPS терминируется на роутере/прокси)
+    ports:
+      - "${WEBHOOK_PORT:-8443}:8443"
+
     # Если StashApp запущен в том же docker-compose
     # networks:
     #   - stash-network
-    
+
     # Лимиты ресурсов (опционально)
     deploy:
       resources:
@@ -33,7 +41,7 @@ services:
         reservations:
           cpus: '0.5'
           memory: 256M
-    
+
     # Логирование
     logging:
       driver: "json-file"

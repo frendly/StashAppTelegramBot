@@ -6,8 +6,11 @@ import os
 import signal
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
+from aiohttp import web
 from dotenv import load_dotenv
+from telegram import Update
 from telegram.ext import Application
 
 from bot.config import BotConfig, load_config
@@ -54,6 +57,7 @@ class Bot:
         self.application: Application = None
         self.config_path = config_path
         self._shutdown_event = asyncio.Event()
+        self._web_app_runner: web.AppRunner | None = None
 
     async def initialize(self):
         """Инициализация компонентов бота."""
@@ -158,33 +162,11 @@ class Bot:
                 status = self.scheduler.get_status()
                 logger.info(f"Планировщик: {status}")
 
-            # Запуск Telegram бота
-            logger.info("Запуск Telegram бота...")
-            await self.application.initialize()
-            await self.application.start()
-            await self.application.updater.start_polling(
-                allowed_updates=["message", "callback_query"], drop_pending_updates=True
-            )
-
-            logger.info("=" * 50)
-            logger.info("✅ Бот запущен и готов к работе!")
-            logger.info("=" * 50)
-
-            # Отправка уведомления администраторам
-            for user_id in self.config.telegram.allowed_user_ids:
-                try:
-                    await self.application.bot.send_message(
-                        chat_id=user_id,
-                        text="✅ <b>Бот запущен и готов к работе!</b>\n\nИспользуйте /help для просмотра команд.",
-                        parse_mode="HTML",
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Не удалось отправить уведомление пользователю {user_id}: {e}"
-                    )
-
-            # Ожидание сигнала завершения
-            await self._shutdown_event.wait()
+            # Запуск Telegram бота: polling или webhook
+            if self.config.telegram.webhook and self.config.telegram.webhook.enabled:
+                await self._start_webhook_mode()
+            else:
+                await self._start_polling_mode()
 
         except Exception as e:
             logger.error(f"❌ Ошибка при запуске бота: {e}", exc_info=True)
@@ -217,7 +199,17 @@ class Bot:
             # Остановка Telegram бота
             if self.application:
                 try:
-                    await self.application.updater.stop()
+                    # Если работали в режиме webhook — сначала удаляем webhook и останавливаем HTTP-сервер
+                    if (
+                        self.config
+                        and self.config.telegram.webhook
+                        and self.config.telegram.webhook.enabled
+                    ):
+                        await self._stop_webhook_mode()
+                    else:
+                        # Режим polling
+                        await self.application.updater.stop()
+
                     await self.application.stop()
                     await self.application.shutdown()
                 except asyncio.CancelledError:
@@ -395,6 +387,165 @@ class Bot:
             logger.error(
                 f"Критическая ошибка при начальном наполнении кеша: {e}", exc_info=True
             )
+
+    async def _start_polling_mode(self):
+        """Запуск бота в режиме polling."""
+        logger.info("Запуск Telegram бота в режиме polling...")
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling(
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True,
+        )
+
+        logger.info("=" * 50)
+        logger.info("✅ Бот запущен в режиме polling и готов к работе!")
+        logger.info("=" * 50)
+
+        # Отправка уведомления администраторам
+        for user_id in self.config.telegram.allowed_user_ids:
+            try:
+                await self.application.bot.send_message(
+                    chat_id=user_id,
+                    text="✅ <b>Бот запущен и готов к работе!</b>\n\nИспользуйте /help для просмотра команд.",
+                    parse_mode="HTML",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"Не удалось отправить уведомление пользователю {user_id}: {e}"
+                )
+
+        # Ожидание сигнала завершения
+        await self._shutdown_event.wait()
+
+    async def _start_webhook_mode(self):
+        """Запуск бота в режиме webhook."""
+        webhook_config = self.config.telegram.webhook
+        assert webhook_config is not None  # для type checker
+
+        logger.info("Запуск Telegram бота в режиме webhook...")
+        logger.info(
+            "Webhook URL: %s, listen: %s:%s",
+            webhook_config.url,
+            webhook_config.listen_address,
+            webhook_config.port,
+        )
+
+        await self.application.initialize()
+        await self.application.start()
+
+        # Настройка aiohttp-приложения для приема webhook-запросов
+        aiohttp_app = web.Application()
+
+        async def handle_update(request: web.Request) -> web.Response:
+            # Проверка секретного токена, если он настроен
+            if webhook_config.secret_token:
+                received_token = request.headers.get(
+                    "X-Telegram-Bot-Api-Secret-Token", ""
+                )
+                if received_token != webhook_config.secret_token:
+                    logger.warning("Получен webhook с неверным secret_token")
+                    return web.Response(status=403, text="Forbidden")
+
+            try:
+                data = await request.json()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Не удалось прочитать JSON из webhook-запроса: {e}")
+                return web.Response(status=400, text="Bad Request")
+
+            try:
+                update = Update.de_json(data=data, bot=self.application.bot)
+                await self.application.process_update(update)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Ошибка обработки webhook-обновления: {e}", exc_info=True)
+                return web.Response(status=500, text="Internal Server Error")
+
+            return web.Response(text="OK")
+
+        # Путь берём из URL (например, /webhook)
+        parsed = urlparse(webhook_config.url or "")
+        path = parsed.path or "/"
+        webhook_path = path if path.startswith("/") else f"/{path}"
+
+        aiohttp_app.router.add_post(webhook_path, handle_update)
+
+        self._web_app_runner = web.AppRunner(aiohttp_app)
+        try:
+            await self._web_app_runner.setup()
+            site = web.TCPSite(
+                self._web_app_runner,
+                webhook_config.listen_address,
+                webhook_config.port,
+            )
+            await site.start()
+            logger.info(
+                "HTTP сервер webhook запущен на %s:%s%s",
+                webhook_config.listen_address,
+                webhook_config.port,
+                webhook_path,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                f"Не удалось запустить HTTP сервер webhook: {e}", exc_info=True
+            )
+            raise
+
+        # Регистрируем webhook в Telegram
+        try:
+            await self.application.bot.set_webhook(
+                url=webhook_config.url,
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True,
+                secret_token=webhook_config.secret_token,
+            )
+            logger.info("Webhook успешно зарегистрирован в Telegram API")
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                f"Не удалось зарегистрировать webhook в Telegram: {e}", exc_info=True
+            )
+            raise
+
+        logger.info("=" * 50)
+        logger.info("✅ Бот запущен в режиме webhook и готов к работе!")
+        logger.info("=" * 50)
+
+        # Отправка уведомления администраторам
+        for user_id in self.config.telegram.allowed_user_ids:
+            try:
+                await self.application.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "✅ <b>Бот запущен в режиме webhook и готов к работе!</b>\n\n"
+                        "Используйте /help для просмотра команд."
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"Не удалось отправить уведомление пользователю {user_id}: {e}"
+                )
+
+        # Ожидание сигнала завершения
+        await self._shutdown_event.wait()
+
+    async def _stop_webhook_mode(self):
+        """Остановка webhook-режима: удаление webhook и остановка HTTP-сервера."""
+        logger.info("Остановка webhook-режима...")
+
+        # Удаляем webhook из Telegram API
+        try:
+            await self.application.bot.delete_webhook(drop_pending_updates=False)
+            logger.info("Webhook удалён из Telegram API")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Не удалось удалить webhook из Telegram: {e}")
+
+        # Останавливаем HTTP-сервер
+        if self._web_app_runner:
+            try:
+                await self._web_app_runner.cleanup()
+                logger.info("HTTP сервер webhook остановлен")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Ошибка при остановке HTTP сервера webhook: {e}")
 
     def signal_handler(self, signum, frame):
         """
