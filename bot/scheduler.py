@@ -10,6 +10,7 @@ from pytz import timezone as pytz_timezone
 from telegram.error import RetryAfter, TelegramError
 
 from bot.config import BotConfig
+from bot.constants import BATCH_SIZE_MULTIPLIER
 from bot.telegram_handler import TelegramHandler
 
 logger = logging.getLogger(__name__)
@@ -283,7 +284,7 @@ class Scheduler:
             )
 
             # 80% новых (без telegram_file_id)
-            new_count = int(batch_size * 0.8)
+            new_count = int(batch_size * BATCH_SIZE_MULTIPLIER)
             new_images = await self.stash_client.get_images_without_file_id(
                 count=new_count, exclude_ids=recent_ids
             )

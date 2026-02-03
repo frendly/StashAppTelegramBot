@@ -5,6 +5,14 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
+from bot.constants import (
+    GALLERY_WEIGHT_DEFAULT,
+    GALLERY_WEIGHT_MAX,
+    GALLERY_WEIGHT_MIN,
+    GALLERY_WEIGHT_MULTIPLIER_NEGATIVE,
+    GALLERY_WEIGHT_MULTIPLIER_POSITIVE,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +52,7 @@ class WeightsRepository:
             result = cursor.fetchone()
             if result and result[0] is not None:
                 return float(result[0])
-            return 1.0
+            return GALLERY_WEIGHT_DEFAULT
 
     def update_gallery_weight(self, gallery_id: str, vote: int) -> float:
         """
@@ -75,23 +83,25 @@ class WeightsRepository:
             if not result:
                 # Галерея не найдена, возвращаем вес по умолчанию
                 logger.warning(f"Галерея {gallery_id} не найдена для обновления веса")
-                return 1.0
+                return GALLERY_WEIGHT_DEFAULT
 
-            current_weight = float(result[0]) if result[0] is not None else 1.0
+            current_weight = (
+                float(result[0]) if result[0] is not None else GALLERY_WEIGHT_DEFAULT
+            )
 
-            # Обновляем вес с учетом коэффициента k=0.2
+            # Обновляем вес с учетом множителей (при "+": ×1.2, при "-": ×0.8)
             if vote > 0:
-                # При "+": вес = вес × 1.2
-                new_weight = current_weight * 1.2
+                # При "+": вес = вес × GALLERY_WEIGHT_MULTIPLIER_POSITIVE
+                new_weight = current_weight * GALLERY_WEIGHT_MULTIPLIER_POSITIVE
             elif vote < 0:
-                # При "-": вес = вес × 0.8
-                new_weight = current_weight * 0.8
+                # При "-": вес = вес × GALLERY_WEIGHT_MULTIPLIER_NEGATIVE
+                new_weight = current_weight * GALLERY_WEIGHT_MULTIPLIER_NEGATIVE
             else:
                 # Нейтральный голос (не должен происходить, но на всякий случай)
                 new_weight = current_weight
 
-            # Применяем ограничения: 0.1 ≤ вес ≤ 10.0
-            new_weight = max(0.1, min(10.0, new_weight))
+            # Применяем ограничения: GALLERY_WEIGHT_MIN ≤ вес ≤ GALLERY_WEIGHT_MAX
+            new_weight = max(GALLERY_WEIGHT_MIN, min(GALLERY_WEIGHT_MAX, new_weight))
 
             # Обновляем вес в БД
             cursor.execute(
@@ -139,7 +149,9 @@ class WeightsRepository:
         return [
             {
                 "gallery_id": row[0],
-                "weight": float(row[1]) if row[1] is not None else 1.0,
+                "weight": float(row[1])
+                if row[1] is not None
+                else GALLERY_WEIGHT_DEFAULT,
             }
             for row in results
         ]
@@ -152,7 +164,10 @@ class WeightsRepository:
             Dict[str, float]: Словарь {gallery_id: weight} для всех неисключенных галерей
         """
         results = self._get_active_gallery_weights_data()
-        return {row[0]: float(row[1]) if row[1] is not None else 1.0 for row in results}
+        return {
+            row[0]: float(row[1]) if row[1] is not None else GALLERY_WEIGHT_DEFAULT
+            for row in results
+        }
 
     def get_gallery_stats_with_viewed_counts(self) -> dict[str, dict[str, Any]]:
         """
@@ -184,7 +199,7 @@ class WeightsRepository:
 
             for row in cursor.fetchall():
                 gallery_id = row[0]
-                weight = float(row[1]) if row[1] else 1.0
+                weight = float(row[1]) if row[1] else GALLERY_WEIGHT_DEFAULT
                 total_images = int(row[2]) if row[2] else 0
                 last_selected_at = row[3]
                 viewed_count = int(row[4]) if row[4] else 0

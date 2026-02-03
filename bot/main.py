@@ -14,6 +14,7 @@ from telegram import Update
 from telegram.ext import Application
 
 from bot.config import BotConfig, load_config
+from bot.constants import BATCH_SIZE_MULTIPLIER
 from bot.database import Database
 from bot.scheduler import Scheduler
 from bot.stash_client import StashClient
@@ -254,7 +255,7 @@ class Bot:
                     batch_needed = min(batch_size, needed - loaded)
 
                     # 80% новых, 20% известных
-                    new_count = int(batch_needed * 0.8)
+                    new_count = int(batch_needed * BATCH_SIZE_MULTIPLIER)
                     known_count = batch_needed - new_count
 
                     # Получаем изображения

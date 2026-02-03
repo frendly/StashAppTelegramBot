@@ -3,6 +3,7 @@
 import logging
 from typing import Any
 
+from bot.constants import EXCLUSION_THRESHOLD_PERCENTAGE
 from bot.database import Database
 from bot.stash_client import StashImage
 
@@ -97,7 +98,9 @@ class CaptionFormatter:
         progress_bar = f"[{filled_chars}{empty_chars}]"
 
         # Цветовая индикация
-        color_emoji = "🔴" if negative_percentage >= 33.0 else "🟢"
+        color_emoji = (
+            "🔴" if negative_percentage >= EXCLUSION_THRESHOLD_PERCENTAGE else "🟢"
+        )
 
         # Форматирование: [██████░░░░] 60% (12/20)
         return f"{color_emoji} {progress_bar} {negative_percentage:.0f}% ({negative_votes}/{total_images})"
@@ -240,7 +243,7 @@ class CaptionFormatter:
         is_preloaded_from_cache: bool = False,
     ) -> str:
         """
-        Форматирование подписи при достижении порога 33.3%.
+        Форматирование подписи при достижении порога исключения.
 
         Формат согласно MVP:
         👤 Перформер: Имя1, Имя2

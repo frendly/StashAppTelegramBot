@@ -4,6 +4,11 @@ import logging
 import time
 from typing import Any
 
+from bot.constants import (
+    CACHE_TTL_FILTERING,
+    EXCLUSION_THRESHOLD_MIN_VOTES,
+    EXCLUSION_THRESHOLD_PERCENTAGE,
+)
 from bot.database import Database
 from bot.stash_client import StashClient, StashImage
 
@@ -14,7 +19,10 @@ class VotingManager:
     """Класс для управления системой голосования."""
 
     def __init__(
-        self, database: Database, stash_client: StashClient, cache_ttl: int = 60
+        self,
+        database: Database,
+        stash_client: StashClient,
+        cache_ttl: int = CACHE_TTL_FILTERING,
     ):
         """
         Инициализация менеджера голосования.
@@ -22,7 +30,7 @@ class VotingManager:
         Args:
             database: База данных
             stash_client: Клиент StashApp
-            cache_ttl: Время жизни кэша в секундах (по умолчанию 60)
+            cache_ttl: Время жизни кэша в секундах (по умолчанию из констант)
         """
         self.database = database
         self.stash_client = stash_client
@@ -313,10 +321,10 @@ class VotingManager:
         Проверка достижения порога исключения для галереи.
 
         Пороги:
-        - 3 или более дизлайков → порог достигнут (независимо от процента)
+        - EXCLUSION_THRESHOLD_MIN_VOTES или более дизлайков → порог достигнут (независимо от процента)
         - Галерея с 1 изображением: 1 минус → порог достигнут
         - Галерея с 2 изображениями: 1 минус → порог достигнут
-        - Галерея с 3+ изображениями: ≥33.3% минусов → порог достигнут
+        - Галерея с 3+ изображениями: ≥EXCLUSION_THRESHOLD_PERCENTAGE% минусов → порог достигнут
 
         Args:
             gallery_id: ID галереи
@@ -340,8 +348,8 @@ class VotingManager:
             if total_images == 0:
                 return (False, 0.0)
 
-            # Новая проверка: если 3 или более дизлайков, порог достигнут
-            if negative_votes >= 3:
+            # Новая проверка: если достигнуто минимальное количество дизлайков, порог достигнут
+            if negative_votes >= EXCLUSION_THRESHOLD_MIN_VOTES:
                 return (True, negative_percentage)
 
             # Проверка порогов согласно MVP (процентная логика)
@@ -352,10 +360,12 @@ class VotingManager:
                 # 2 изображения: 1 минус → порог достигнут
                 threshold_reached = negative_votes >= 1
             else:
-                # 3+ изображения: ≥33.3% минусов → порог достигнут
+                # 3+ изображения: ≥EXCLUSION_THRESHOLD_PERCENTAGE% минусов → порог достигнут
                 # Используем прямое сравнение для избежания проблем с точностью float
                 # negative_percentage уже округлен до 2 знаков в get_gallery_statistics
-                threshold_reached = negative_percentage >= 33.3
+                threshold_reached = (
+                    negative_percentage >= EXCLUSION_THRESHOLD_PERCENTAGE
+                )
 
             return (threshold_reached, negative_percentage)
 

@@ -4,6 +4,8 @@ import logging
 import time
 from typing import Any
 
+from bot.constants import CACHE_TTL_GALLERIES
+
 from .client import StashGraphQLClient
 
 logger = logging.getLogger(__name__)
@@ -12,13 +14,15 @@ logger = logging.getLogger(__name__)
 class GalleryService:
     """Сервис для работы с галереями из StashApp."""
 
-    def __init__(self, client: StashGraphQLClient, cache_ttl: int = 3600):
+    def __init__(
+        self, client: StashGraphQLClient, cache_ttl: int = CACHE_TTL_GALLERIES
+    ):
         """
         Инициализация сервиса.
 
         Args:
             client: Базовый GraphQL клиент
-            cache_ttl: Время жизни кэша в секундах (по умолчанию 1 час)
+            cache_ttl: Время жизни кэша в секундах (по умолчанию из констант)
         """
         self.client = client
         self.cache_ttl = cache_ttl

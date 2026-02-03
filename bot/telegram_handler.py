@@ -14,6 +14,7 @@ from telegram.ext import (
 )
 
 from bot.config import BotConfig
+from bot.constants import RATE_LIMIT_UNAUTHORIZED_MESSAGE
 from bot.database import Database
 from bot.handlers.caption_formatter import CaptionFormatter
 from bot.handlers.command_handler import CommandHandler as CmdHandler
@@ -115,11 +116,11 @@ class TelegramHandler:
         if self.command_handler._is_authorized(user_id):
             return True
 
-        # Если не авторизован, проверяем rate limiting (30 секунд)
+        # Если не авторизован, проверяем rate limiting
         now = time.time()
         if user_id in self._last_unauthorized_message_time:
             time_passed = now - self._last_unauthorized_message_time[user_id]
-            if time_passed < 30:
+            if time_passed < RATE_LIMIT_UNAUTHORIZED_MESSAGE:
                 # Пропускаем отправку сообщения, чтобы не спамить
                 return False
 
