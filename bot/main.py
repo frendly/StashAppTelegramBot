@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 import signal
 import sys
 from pathlib import Path
@@ -23,10 +22,11 @@ from bot.voting import VotingManager
 
 # Базовая настройка логирования (до загрузки конфигурации)
 # Будет переконфигурировано после загрузки config
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-    handlers=[logging.StreamHandler(sys.stdout)],
+setup_logging(
+    log_path="bot.log",
+    log_level="INFO",
+    json_format=False,
+    console_format="text",
 )
 
 logger = logging.getLogger(__name__)
@@ -501,19 +501,14 @@ async def main():
         sys.exit(1)
 
     # Настройка логирования на основе конфигурации
-    if config.logging:
-        setup_logging(
-            log_path=config.logging.log_path,
-            log_level=config.logging.log_level,
-            json_format=config.logging.json_format,
-            console_format=config.logging.console_format,
-            rotation=config.logging.rotation,
-        )
-    else:
-        # Fallback на значения по умолчанию
-        log_path = os.getenv("LOG_PATH", "bot.log")
-        log_level = os.getenv("LOG_LEVEL", "INFO")
-        setup_logging(log_path=log_path, log_level=log_level)
+    # config.logging всегда существует (создается с дефолтными значениями в config.py)
+    setup_logging(
+        log_path=config.logging.log_path,
+        log_level=config.logging.log_level,
+        json_format=config.logging.json_format,
+        console_format=config.logging.console_format,
+        rotation=config.logging.rotation,
+    )
 
     # Создание и запуск бота (передаем уже загруженную конфигурацию)
     bot = Bot(config=config)
