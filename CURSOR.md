@@ -3,6 +3,11 @@
 > **Compact version for Cursor AI**
 > Full docs: [CURSOR_FULL.md](CURSOR_FULL.md) | [README.md](README.md)
 > **⚠️ AI:** Always respond in Russian. Code comments must be in Russian.
+> **⚠️ VERSION UPDATE:** When making ANY code changes, automatically update the project version:
+>   1. Determine change type: **PATCH** (bug fixes), **MINOR** (new features), **MAJOR** (breaking changes)
+>   2. Update version in: `bot/__init__.py` (required), `CHANGELOG.md` (required, with current date), `pyproject.toml` (required if version is specified)
+>   3. Get current date using `date +%Y-%m-%d` command
+>   4. **DO NOT wait for user reminders** - do this automatically after every code change!
 
 ---
 

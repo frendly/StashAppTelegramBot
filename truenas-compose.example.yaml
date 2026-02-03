@@ -12,6 +12,8 @@ services:
     environment:
       - TZ=Europe/Moscow
       - LOG_PATH=/dev/null
+      # Пример: если используете webhook, можно задать внешний порт через переменную
+      # - WEBHOOK_PORT=8443
     healthcheck:
       interval: 60s
       retries: 3
@@ -30,6 +32,11 @@ services:
         max-size: 10m
     restart: unless-stopped
     user: '568:568'
+    # Пример проброса порта для webhook:
+    # внутри контейнера бот по умолчанию слушает на 8443 (telegram.webhook.port),
+    # а снаружи TrueNAS будет доступен на WEBHOOK_PORT (например 8443 или 30443).
+    #ports:
+    #  - "${WEBHOOK_PORT:-8443}:8443"
     volumes:
       - read_only: True
         source: /mnt/apps/stash-telegram-bot/config
