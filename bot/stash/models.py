@@ -103,38 +103,22 @@ class StashImage:
 
     def get_gallery_title(self) -> str | None:
         """
-        Получение названия галереи с fallback на имя папки или файла.
+        Получение названия галереи с fallback на имя файла.
 
         Returns:
             str | None: Название галереи или None, если не найдено
         """
         # Если есть gallery_title (не None и не пустая строка), используем его
-        if (
-            self.gallery_title
-            and isinstance(self.gallery_title, str)
-            and self.gallery_title.strip()
-        ):
+        if self.gallery_title and self.gallery_title.strip():
             return self.gallery_title
 
-        # Если нет gallery_title, пытаемся извлечь из folder
-        if self.gallery_folder:
-            folder_path = self.gallery_folder.get("path", "")
-            if folder_path:
-                folder_name = os.path.basename(folder_path.rstrip("/"))
-                if folder_name:
-                    return folder_name
-
-        # Если нет ни title, ни folder, пытаемся извлечь из files[0].path
-        if hasattr(self, "gallery_files") and self.gallery_files:
-            first_file = self.gallery_files[0]
-            file_path = first_file.get("path", "")
+        # Если нет gallery_title, пытаемся извлечь из files[0].path
+        if self.gallery_files:
+            file_path = self.gallery_files[0].get("path", "")
             if file_path:
                 file_name = os.path.basename(file_path)
                 if file_name:
-                    # Убираем расширение
-                    name_without_ext = os.path.splitext(file_name)[0]
-                    if name_without_ext:
-                        return name_without_ext
+                    return file_name
 
         # Последний fallback - используем gallery_id
         if self.gallery_id:
