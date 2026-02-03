@@ -174,8 +174,11 @@ score = (positive_votes - negative_votes) / total_votes
 
 7. **Service channel preloading**
    - Optional: preload images to service channel for file_id
-   - Runs every minute via scheduler
-   - Preloads 2 high-quality images
+   - Runs at night (every 5 minutes from 2:00 to 6:00) via scheduler
+   - Preloads up to 1000 high-quality images per run
+   - Automatic rate limit handling (RetryAfter support)
+   - Protection against ban (block detection, error handling)
+   - Progress logging every 100 images with ETA
    - Significantly speeds up scheduled sends
 
 3. **Filter caching**
@@ -611,9 +614,9 @@ pytz>=2024.1              # Timezone support
 
 ---
 
-**Version:** 1.1.0 (compact)
-**Date:** 2026-01-30
+**Version:** 1.4.0 (compact)
+**Date:** 2026-02-03
 **Status:** ✅ Production Ready
-**Last Updated:** 2026-01-30
+**Last Updated:** 2026-02-03
 
 *Compact version for efficient work in Cursor AI. Details → [CURSOR_FULL.md](CURSOR_FULL.md)*

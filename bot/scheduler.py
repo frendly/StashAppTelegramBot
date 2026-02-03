@@ -2,10 +2,12 @@
 
 import asyncio
 import logging
+import time
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pytz import timezone as pytz_timezone
+from telegram.error import RetryAfter, TelegramError
 
 from bot.config import BotConfig
 from bot.telegram_handler import TelegramHandler
@@ -100,7 +102,7 @@ class Scheduler:
                     "Задача добавлена: обновление статистики галерей (ежедневно в 3:00)"
                 )
 
-            # Добавление задачи предзагрузки изображений в служебный канал (каждую минуту)
+            # Добавление задачи предзагрузки изображений в служебный канал (ночью каждые 5 минут)
             if (
                 self.config.telegram.cache_channel_id
                 and self.telegram_handler
@@ -108,8 +110,8 @@ class Scheduler:
                 and self.stash_client
             ):
                 preload_trigger = CronTrigger(
-                    minute="*",
-                    hour="*",
+                    minute="*/5",
+                    hour="2-5",
                     day="*",
                     month="*",
                     day_of_week="*",
@@ -123,7 +125,8 @@ class Scheduler:
                     replace_existing=True,
                 )
                 logger.info(
-                    "Задача добавлена: предзагрузка изображений в служебный канал (каждую минуту)"
+                    "Задача добавлена: предзагрузка изображений в служебный канал "
+                    "(ночью с 2:00 до 6:00, каждые 5 минут)"
                 )
             elif self.config.telegram.cache_channel_id:
                 logger.warning(
@@ -236,7 +239,11 @@ class Scheduler:
         - 80% новых изображений (без telegram_file_id) - равномерно по галереям
         - 20% известных изображений (с telegram_file_id) - по весам популярности
 
-        Поддерживает минимальный размер кеша (по умолчанию 200).
+        Безопасная загрузка с соблюдением rate limits Telegram API:
+        - Максимум 20 сообщений/сек (консервативно)
+        - Автоматическая обработка RetryAfter
+        - Экспоненциальный backoff при ошибках
+        - Защита от бана (проверка на блокировку)
         """
         if not self.database or not self.stash_client or not self.telegram_handler:
             logger.warning(
@@ -249,7 +256,7 @@ class Scheduler:
             return
 
         try:
-            logger.debug("Начало предзагрузки изображений в служебный канал...")
+            logger.info("Начало предзагрузки изображений в служебный канал...")
 
             # Проверка размера кеша
             cache_size = await self.stash_client.get_cache_size()
@@ -261,14 +268,14 @@ class Scheduler:
             if cache_size < min_cache_size:
                 # Критический уровень - загружаем больше
                 needed = min_cache_size - cache_size
-                batch_size = min(needed, 10)  # Максимум 10 за раз
+                batch_size = min(needed, 1000)  # Максимум 1000 за раз
                 logger.info(
                     f"Размер кеша: {cache_size}/{min_cache_size}. "
                     f"Загружаем {batch_size} изображений для пополнения"
                 )
             else:
-                # Нормальный уровень - обычная предзагрузка
-                batch_size = 2
+                # Нормальный уровень - ночью загружаем большие объемы
+                batch_size = 1000
 
             # Получение списка недавно отправленных ID
             recent_ids = self.database.get_recent_image_ids(
@@ -298,26 +305,126 @@ class Scheduler:
                 f"(новых: {len(new_images)}, известных: {len(known_images)})"
             )
 
-            # Предзагрузка каждого изображения
+            # Предзагрузка с соблюдением rate limits
             success_count = 0
             error_count = 0
+            rate_limit_errors = 0
+            consecutive_errors = 0
+            max_consecutive_errors = 10  # Остановка при 10 ошибках подряд
 
-            for image in images_to_preload:
+            # Базовая задержка: 0.05 сек = 20 сообщений/сек (безопасно)
+            base_delay = 0.05
+            current_delay = base_delay
+
+            start_time = time.time()
+            processed_count = 0  # Счетчик реально обработанных изображений
+
+            for idx, image in enumerate(images_to_preload, 1):
+                processed_count = idx  # Обновляем счетчик обработанных
                 try:
-                    # Используем публичный метод telegram_handler для предзагрузки
                     await self.telegram_handler.preload_image_to_cache(
                         image, use_high_quality=True
                     )
                     success_count += 1
+                    consecutive_errors = 0  # Сбрасываем счетчик ошибок
+                    current_delay = base_delay  # Возвращаем базовую задержку
+
+                    # Прогресс каждые 100 изображений
+                    if idx % 100 == 0:
+                        elapsed = time.time() - start_time
+                        rate = idx / elapsed if elapsed > 0 else 0
+                        remaining = len(images_to_preload) - idx
+                        if rate > 0:
+                            eta_seconds = remaining / rate
+                            eta_str = f"{eta_seconds:.0f} сек"
+                        else:
+                            eta_str = "N/A"
+                        logger.info(
+                            f"Прогресс: {idx}/{len(images_to_preload)} "
+                            f"({success_count} успешно, {error_count} ошибок). "
+                            f"Скорость: {rate:.1f} img/sec, ETA: {eta_str}"
+                        )
+
+                    # Задержка между запросами
+                    await asyncio.sleep(current_delay)
+
+                except RetryAfter as e:
+                    # Telegram просит подождать - это нормально, не ошибка
+                    rate_limit_errors += 1
+                    wait_time = e.retry_after
+                    logger.warning(
+                        f"Rate limit достигнут (изображение {idx}/{len(images_to_preload)}). "
+                        f"Ожидание {wait_time} секунд..."
+                    )
+                    await asyncio.sleep(wait_time)
+
+                    # Увеличиваем задержку после rate limit
+                    current_delay = min(current_delay * 1.5, 1.0)  # Макс 1 сек
+
+                    # Повторяем попытку
+                    try:
+                        await self.telegram_handler.preload_image_to_cache(
+                            image, use_high_quality=True
+                        )
+                        success_count += 1
+                        consecutive_errors = 0  # Сбрасываем счетчик ошибок
+                        current_delay = base_delay  # Возвращаем базовую задержку
+                    except Exception as retry_e:
+                        error_count += 1
+                        consecutive_errors += 1
+                        logger.warning(
+                            f"Ошибка при повторной попытке изображения {image.id}: {retry_e}"
+                        )
+
+                    # Задержка перед следующим изображением после обработки RetryAfter
+                    await asyncio.sleep(current_delay)
+
+                except TelegramError as e:
+                    error_count += 1
+                    consecutive_errors += 1
+                    error_msg = str(e)
+
+                    # Проверяем на критические ошибки
+                    if "blocked" in error_msg.lower() or "banned" in error_msg.lower():
+                        logger.error(
+                            "КРИТИЧНО: Бот заблокирован! Останавливаем предзагрузку."
+                        )
+                        break
+
+                    logger.warning(
+                        f"Ошибка Telegram при предзагрузке изображения {image.id}: {e}"
+                    )
+
+                    # Экспоненциальный backoff при ошибках
+                    current_delay = min(current_delay * 2, 2.0)  # Макс 2 сек
+                    await asyncio.sleep(current_delay)
+
+                    # Если слишком много ошибок подряд - останавливаемся
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.error(
+                            f"Слишком много ошибок подряд ({consecutive_errors}). "
+                            f"Останавливаем предзагрузку для безопасности."
+                        )
+                        break
+
                 except Exception as e:
                     error_count += 1
+                    consecutive_errors += 1
                     logger.warning(
                         f"Ошибка при предзагрузке изображения {image.id}: {e}"
                     )
+                    await asyncio.sleep(current_delay)
+
+            elapsed_total = time.time() - start_time
+            # processed_count уже содержит реально обработанное количество
+            avg_rate = processed_count / elapsed_total if elapsed_total > 0 else 0
 
             logger.info(
-                f"Предзагрузка завершена: успешно {success_count}, ошибок {error_count} "
-                f"из {len(images_to_preload)} изображений"
+                f"Предзагрузка завершена: успешно {success_count}, ошибок {error_count}, "
+                f"rate limit пауз {rate_limit_errors} из {processed_count} обработанных "
+                f"(всего запрошено {len(images_to_preload)}). "
+                f"Время: {elapsed_total:.1f} сек ({elapsed_total / 60:.1f} мин), "
+                f"средняя скорость: {avg_rate:.1f} img/sec"
             )
 
         except Exception as e:
