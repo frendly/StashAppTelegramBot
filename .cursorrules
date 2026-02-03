@@ -1,0 +1,175 @@
+# Development Rules for Cursor AI
+
+> **Rules for AI agent behavior.** For technical details see `CURSOR.md` and `CURSOR_FULL.md`.
+
+## Language and Communication
+
+- **Always respond in Russian**
+- **All code comments must be in Russian**
+- Explain solutions and changes in Russian
+
+## Version Update
+
+⚠️ **CRITICAL:** Automatically update project version on ANY code changes:
+
+1. Determine change type:
+   - **PATCH** (1.0.0 → 1.0.1): Bug fixes, non-breaking API changes
+   - **MINOR** (1.0.0 → 1.1.0): New features, backward compatible changes
+   - **MAJOR** (1.0.0 → 2.0.0): Breaking API changes
+
+2. Update version in:
+   - `bot/__init__.py` (required) - main version storage
+   - `CHANGELOG.md` (required) - add section with current date and change description
+   - `pyproject.toml` (if version specified there)
+
+3. Get current date using `date +%Y-%m-%d` command
+
+4. **DO NOT wait for user reminders** - do this automatically after every code change!
+
+## Library Priority
+
+When solving any task, ALWAYS follow this order:
+
+1. **First, search for ready-made libraries from PyPI**
+   - Check popular and proven libraries
+   - Consider maintenance activity (recent updates, GitHub stars)
+   - Check compatibility with current project dependencies
+   - Check `requirements.txt` - library might already be installed
+
+2. **Check Python standard library**
+   - Many tasks can be solved with standard modules (os, pathlib, json, datetime, etc.)
+
+3. **Only if no suitable library exists** - propose custom solution
+   - Explain why library doesn't fit
+   - Propose minimal solution, not overcomplicated
+
+### Principles
+
+- **DRY (Don't Repeat Yourself)**: Use ready solutions instead of code duplication
+- **Don't reinvent the wheel**: If task is solved by library - use it
+- **Minimalism**: Prefer lightweight libraries over heavy frameworks
+- **Documentation**: Choose libraries with good documentation
+
+### When Adding New Library
+
+1. Check if alternative exists in current dependencies (`requirements.txt`)
+2. If new library needed - explain its advantages
+3. Specify minimum version for compatibility
+4. Update `requirements.txt`
+
+## Architectural Patterns
+
+### Facade Pattern
+
+Use facades to simplify interfaces:
+- `telegram_handler.py` - facade for Telegram command handlers (delegates to `handlers/`)
+- `stash_client.py` - facade for StashApp API (delegates to `stash/` services)
+
+**When adding new functionality:**
+- If it's Telegram command → add to corresponding handler in `handlers/`, then delegate through `TelegramHandler`
+- If it's StashApp API work → add to corresponding service in `stash/`, then delegate through `StashClient`
+
+### Repository Pattern
+
+Database uses Repository pattern:
+- `database/base.py` - base class
+- `database/sent_photos.py` - sent photos repository
+- `database/votes.py` - votes repository
+- `database/preferences.py` - preferences repository
+- `database/weights.py` - gallery weights repository
+- `database/statistics.py` - statistics repository
+
+**When working with DB:**
+- Use corresponding repository
+- Don't add methods directly to main `Database` class - add to repository
+- Main `Database` class delegates methods to repositories for backward compatibility
+
+### Async/Await
+
+- **Always use async/await** for I/O operations
+- Use `asyncio.create_task()` for background tasks
+- Use async context managers where possible (e.g., `StashClient`)
+
+## Code Quality
+
+### Required Standards
+
+- ✅ **Type hints** for all functions and methods
+- ✅ **Docstrings** for all public methods (in Russian)
+- ✅ **PEP 8 compliance** - follow Python standards
+- ✅ **Async/await best practices** - use correctly
+- ✅ **Comprehensive error handling** - handle all errors
+- ✅ **Performance monitoring** - use `@timing_decorator` or `PerformanceTimer` for important operations
+
+### Error Handling
+
+- **Retry logic**: Up to 5 attempts for StashApp API requests
+- **Graceful degradation**: Bot must continue working on errors
+- **Logging**: All errors must be logged with details
+- **User notification**: Clear messages to user in Russian
+
+### Performance
+
+- Use **thumbnail** instead of preview (15-30 KB vs 50-100 KB)
+- Load priority: `thumbnail → preview → image`
+- Use **caching** where possible (TTL 60 seconds for filters, 1 hour for gallery list)
+- Invalidate cache on data changes
+- Use **file_id caching** for Telegram (save to DB after first send)
+- Use **prefetch** for next image in background (after sending current)
+- **Rate limiting**: 2 seconds between `/random` commands
+
+## Project Structure
+
+Follow existing structure:
+
+```
+bot/
+├── handlers/          # Telegram command handlers
+├── stash/            # StashApp API services
+├── database/         # DB repositories
+├── main.py           # Entry point
+├── config.py         # Configuration
+├── telegram_handler.py  # Telegram facade
+├── stash_client.py      # StashApp facade
+├── scheduler.py        # Scheduler
+├── voting.py           # Voting system
+└── performance.py     # Profiling
+```
+
+### Adding New Command
+
+1. In `handlers/command_handler.py`: create `new_command()` method
+2. In `telegram_handler.py`: add `async def new_command()` that delegates to `self.command_handler.new_command()`
+3. Register handler in `telegram_handler.py:setup_handlers()`: `application.add_handler(CommandHandler("new", self.new_command))`
+4. Update `/help` command in `command_handler.py:help_command()` with description
+
+### Adding DB Field
+
+1. In corresponding repository (e.g., `database/preferences.py`): add to `CREATE TABLE`
+2. Create method to work with field in repository
+3. Add delegation in `database/__init__.py` if needed
+4. Migration: users need to recreate DB or run migration script
+
+## Project Dependencies
+
+Current dependencies (don't add duplicates):
+- `python-telegram-bot==20.7` - Telegram API
+- `aiohttp==3.9.1` - Async HTTP
+- `APScheduler==3.10.4` - Scheduler
+- `PyYAML==6.0.1` - YAML
+- `python-dotenv==1.0.0` - .env
+- `pytz>=2024.1` - Timezone support
+
+## Additional Resources
+
+For project understanding see:
+- `CURSOR.md` - technical documentation (compact version)
+- `CURSOR_FULL.md` - full technical documentation
+- `README.md` - setup instructions
+
+## Important Notes
+
+- Project uses **Semantic Versioning** (MAJOR.MINOR.PATCH)
+- Always check backward compatibility on changes
+- Use existing patterns instead of creating new ones
+- When in doubt - look at existing code as example
