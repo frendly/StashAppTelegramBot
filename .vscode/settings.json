@@ -5,7 +5,8 @@
   // Ruff as linter and formatter
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff",
-    "editor.formatOnSave": true,
+    // "editor.formatOnSave": true,
+    "editor.formatOnSave": false,
     "editor.codeActionsOnSave": {
       "source.fixAll": "explicit",
       "source.organizeImports": "explicit"
@@ -14,9 +15,10 @@
 
   // Performance: disable diagnostics while typing (Ruff will still check on save)
   "editor.formatOnType": false,
+  "editor.formatOnPaste": false,
+  "editor.formatOnSave": false,
   // "python.analysis.diagnosticMode": "openFilesOnly",
   // "python.analysis.typeCheckingMode": "off",
-  // "editor.formatOnPaste": false,
 
   // Editor settings
   "editor.rulers": [88],

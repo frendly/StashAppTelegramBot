@@ -28,7 +28,8 @@ os.makedirs(
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    # TODO: вернуть info
+    level=logging.DEBUG,
     handlers=[
         logging.StreamHandler(sys.stdout),
         logging.FileHandler(log_path, encoding="utf-8"),

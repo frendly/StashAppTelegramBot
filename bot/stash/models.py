@@ -40,11 +40,12 @@ class StashImage:
             # Сохраняем folder для возможного использования в форматтере
             self.gallery_folder = gallery.get("folder")
 
-            # Если title пустой, извлекаем название из пути к папке
-            if not self.gallery_title or self.gallery_title.strip() == "":
-                folder = self.gallery_folder
-                if folder:
-                    folder_path = folder.get("path", "")
+            # Если title пустой или None, извлекаем название из пути к папке
+            if not self.gallery_title or (
+                isinstance(self.gallery_title, str) and not self.gallery_title.strip()
+            ):
+                if self.gallery_folder:
+                    folder_path = self.gallery_folder.get("path", "")
                     if folder_path:
                         # Извлекаем последнюю часть пути (название папки)
                         # Например: /data/images/hetrainsherass -> hetrainsherass
@@ -90,8 +91,12 @@ class StashImage:
         Returns:
             str | None: Название галереи или None, если не найдено
         """
-        # Если есть gallery_title, используем его
-        if self.gallery_title and self.gallery_title.strip():
+        # Если есть gallery_title (не None и не пустая строка), используем его
+        if (
+            self.gallery_title
+            and isinstance(self.gallery_title, str)
+            and self.gallery_title.strip()
+        ):
             return self.gallery_title
 
         # Если нет gallery_title, пытаемся извлечь из folder
