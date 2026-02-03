@@ -113,15 +113,6 @@ class CaptionFormatter:
             str: Название галереи или "не указан"
         """
         title = image.get_gallery_title()
-        if not title:
-            # Логируем для диагностики (только если есть gallery_id - значит галерея есть, но без названия)
-            if image.gallery_id:
-                logger.info(
-                    f"Галерея без названия: image_id={image.id}, "
-                    f"gallery_id={image.gallery_id}, "
-                    f"gallery_title={image.gallery_title}, "
-                    f"gallery_folder={image.gallery_folder}"
-                )
         return title if title else "не указан"
 
     def format_caption(

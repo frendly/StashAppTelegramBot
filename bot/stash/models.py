@@ -40,7 +40,10 @@ class StashImage:
             # Сохраняем folder для возможного использования в форматтере
             self.gallery_folder = gallery.get("folder")
 
-            # Если title пустой или None, извлекаем название из пути к папке
+            # Сохраняем files для fallback на путь файла
+            self.gallery_files = gallery.get("files", [])
+
+            # Если title пустой или None, извлекаем название из пути к папке или файлу
             if not self.gallery_title or (
                 isinstance(self.gallery_title, str) and not self.gallery_title.strip()
             ):
@@ -52,10 +55,24 @@ class StashImage:
                         folder_name = os.path.basename(folder_path.rstrip("/"))
                         if folder_name:
                             self.gallery_title = folder_name
+                # Если folder тоже нет, пытаемся извлечь из files[0].path
+                elif self.gallery_files:
+                    first_file = self.gallery_files[0]
+                    file_path = first_file.get("path", "")
+                    if file_path:
+                        # Извлекаем имя файла без расширения
+                        # Например: /path/to/file.zip -> file
+                        file_name = os.path.basename(file_path)
+                        if file_name:
+                            # Убираем расширение
+                            name_without_ext = os.path.splitext(file_name)[0]
+                            if name_without_ext:
+                                self.gallery_title = name_without_ext
         else:
             self.gallery_id = None
             self.gallery_title = None
             self.gallery_folder = None
+            self.gallery_files = []
 
         # Информация о перформерах
         self.performers = [
@@ -86,7 +103,7 @@ class StashImage:
 
     def get_gallery_title(self) -> str | None:
         """
-        Получение названия галереи с fallback на имя папки.
+        Получение названия галереи с fallback на имя папки или файла.
 
         Returns:
             str | None: Название галереи или None, если не найдено
@@ -106,6 +123,22 @@ class StashImage:
                 folder_name = os.path.basename(folder_path.rstrip("/"))
                 if folder_name:
                     return folder_name
+
+        # Если нет ни title, ни folder, пытаемся извлечь из files[0].path
+        if hasattr(self, "gallery_files") and self.gallery_files:
+            first_file = self.gallery_files[0]
+            file_path = first_file.get("path", "")
+            if file_path:
+                file_name = os.path.basename(file_path)
+                if file_name:
+                    # Убираем расширение
+                    name_without_ext = os.path.splitext(file_name)[0]
+                    if name_without_ext:
+                        return name_without_ext
+
+        # Последний fallback - используем gallery_id
+        if self.gallery_id:
+            return f"Галерея {self.gallery_id}"
 
         return None
 

@@ -270,6 +270,9 @@ class FileIdService:
                 folder {
                   path
                 }
+                files {
+                  path
+                }
               }
               performers {
                 id
@@ -363,6 +366,9 @@ class FileIdService:
                 folder {
                   path
                 }
+                files {
+                  path
+                }
               }
               performers {
                 id
@@ -453,6 +459,9 @@ class FileIdService:
                 id
                 title
                 folder {
+                  path
+                }
+                files {
                   path
                 }
               }

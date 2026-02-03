@@ -84,6 +84,9 @@ class ImageService:
                 folder {
                   path
                 }
+                files {
+                  path
+                }
               }
               performers {
                 id
@@ -319,6 +322,9 @@ class ImageService:
                 folder {
                   path
                 }
+                files {
+                  path
+                }
               }
               performers {
                 id
@@ -403,6 +409,9 @@ class ImageService:
                 id
                 title
                 folder {
+                  path
+                }
+                files {
                   path
                 }
               }
@@ -731,6 +740,9 @@ class ImageService:
               id
               title
               folder {
+                path
+              }
+              files {
                 path
               }
             }
