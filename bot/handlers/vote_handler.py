@@ -185,16 +185,11 @@ class VoteHandler:
             ]
 
             # Если дизлайк и есть информация о галерее, добавляем кнопку исключения
-            if vote < 0 and image.gallery_id and image.gallery_title:
-                exclude_button_text = f'🚫 Исключить "{image.gallery_title}"'
-                if len(exclude_button_text) > 64:
-                    exclude_button_text = (
-                        f'🚫 Исключить "{image.gallery_title[:50]}..."'
-                    )
+            if vote < 0 and image.gallery_id:
                 voted_keyboard.append(
                     [
                         InlineKeyboardButton(
-                            exclude_button_text,
+                            "🚫 Исключить галерею",
                             callback_data=f"exclude_gallery_{image.gallery_id}",
                         )
                     ]
