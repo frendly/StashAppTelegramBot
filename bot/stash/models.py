@@ -1,5 +1,6 @@
 """Модели данных для StashApp."""
 
+import os
 from typing import Any
 
 
@@ -31,8 +32,25 @@ class StashImage:
 
         # Информация о галерее
         galleries = data.get("galleries", [])
-        self.gallery_id = galleries[0]["id"] if galleries else None
-        self.gallery_title = galleries[0]["title"] if galleries else None
+        if galleries:
+            gallery = galleries[0]
+            self.gallery_id = gallery["id"]
+            self.gallery_title = gallery.get("title")
+
+            # Если title пустой, извлекаем название из пути к папке
+            if not self.gallery_title or self.gallery_title.strip() == "":
+                folder = gallery.get("folder")
+                if folder:
+                    folder_path = folder.get("path", "")
+                    if folder_path:
+                        # Извлекаем последнюю часть пути (название папки)
+                        # Например: /data/images/hetrainsherass -> hetrainsherass
+                        folder_name = os.path.basename(folder_path.rstrip("/"))
+                        if folder_name:
+                            self.gallery_title = folder_name
+        else:
+            self.gallery_id = None
+            self.gallery_title = None
 
         # Информация о перформерах
         self.performers = [

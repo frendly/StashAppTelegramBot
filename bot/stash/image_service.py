@@ -81,6 +81,9 @@ class ImageService:
               galleries {
                 id
                 title
+                folder {
+                  path
+                }
               }
               performers {
                 id
@@ -313,6 +316,9 @@ class ImageService:
               galleries {
                 id
                 title
+                folder {
+                  path
+                }
               }
               performers {
                 id
@@ -396,6 +402,9 @@ class ImageService:
               galleries {
                 id
                 title
+                folder {
+                  path
+                }
               }
               performers {
                 id
@@ -721,6 +730,9 @@ class ImageService:
             galleries {
               id
               title
+              folder {
+                path
+              }
             }
             performers {
               id

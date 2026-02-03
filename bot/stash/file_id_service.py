@@ -267,6 +267,9 @@ class FileIdService:
               galleries {
                 id
                 title
+                folder {
+                  path
+                }
               }
               performers {
                 id
@@ -357,6 +360,9 @@ class FileIdService:
               galleries {
                 id
                 title
+                folder {
+                  path
+                }
               }
               performers {
                 id
@@ -446,6 +452,9 @@ class FileIdService:
               galleries {
                 id
                 title
+                folder {
+                  path
+                }
               }
               performers {
                 id
