@@ -12,6 +12,12 @@
     }
   },
 
+  // Performance: disable diagnostics while typing (Ruff will still check on save)
+  "editor.formatOnType": false,
+  // "python.analysis.diagnosticMode": "openFilesOnly",
+  // "python.analysis.typeCheckingMode": "off",
+  // "editor.formatOnPaste": false,
+
   // Editor settings
   "editor.rulers": [88],
   "files.trimTrailingWhitespace": true,
