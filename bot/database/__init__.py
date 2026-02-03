@@ -44,9 +44,6 @@ class Database(DatabaseBase):
         self.get_random_cached_image_id = (
             self.sent_photos_repo.get_random_cached_image_id
         )
-        self.get_all_file_ids_for_migration = (
-            self.sent_photos_repo.get_all_file_ids_for_migration
-        )
 
         # Votes methods
         self.add_vote = self.votes_repo.add_vote

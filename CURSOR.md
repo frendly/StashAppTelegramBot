@@ -545,7 +545,6 @@ database:
 
 cache:  # Optional: кеширование изображений
   min_cache_size: 200  # Минимальный размер кеша
-  migrate_file_ids: false  # Миграция file_id из БД в StashApp при старте
 ```
 
 **Cron examples:**

@@ -187,7 +187,6 @@ class DatabaseConfig:
 @dataclass
 class CacheConfig:
     min_cache_size: int = 200  # Минимальный размер кеша
-    migrate_file_ids: bool = False  # Миграция file_id из БД в StashApp при старте
 
 @dataclass
 class BotConfig:
@@ -1204,7 +1203,6 @@ database:
 
 cache:  # Опционально: кеширование изображений
   min_cache_size: 200  # Минимальный размер кеша
-  migrate_file_ids: false  # Миграция file_id из БД в StashApp при старте
 ```
 
 ### 3. Запуск через Docker (рекомендуется)

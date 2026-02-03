@@ -99,10 +99,6 @@ class Bot:
             else:
                 logger.info("✅ Подключение к StashApp успешно")
 
-            # Миграция file_id из БД в StashApp (если включена)
-            if self.config.cache and self.config.cache.migrate_file_ids:
-                await self._migrate_file_ids_to_stash()
-
             # Начальное наполнение кеша при старте (если кеш пуст)
             if self.config.cache:
                 await self._initialize_cache()
@@ -228,85 +224,6 @@ class Bot:
 
         except Exception as e:
             logger.error(f"Ошибка при остановке бота: {e}", exc_info=True)
-
-    async def _migrate_file_ids_to_stash(self):
-        """
-        Миграция file_id из БД в StashApp.
-
-        Переносит все существующие file_id_high_quality из БД в StashApp
-        (кастомное поле telegram_file_id).
-        """
-        logger.info("=" * 50)
-        logger.info("Начало миграции file_id из БД в StashApp...")
-        logger.info("=" * 50)
-
-        try:
-            # Получаем все file_id из БД
-            file_ids = self.database.get_all_file_ids_for_migration()
-            total_count = len(file_ids)
-
-            if total_count == 0:
-                logger.info("Нет file_id для миграции. Миграция пропущена.")
-                return
-
-            logger.info(f"Найдено {total_count} записей для миграции")
-
-            success_count = 0
-            error_count = 0
-            skipped_count = 0
-
-            for idx, (image_id, file_id) in enumerate(file_ids, 1):
-                try:
-                    # Проверяем, есть ли уже telegram_file_id в StashApp
-                    existing_file_id = await self.stash_client.get_telegram_file_id(
-                        image_id
-                    )
-
-                    if existing_file_id:
-                        # Уже есть в StashApp, пропускаем
-                        skipped_count += 1
-                        if idx % 100 == 0:
-                            logger.debug(
-                                f"Пропущено {skipped_count} записей (уже в StashApp)"
-                            )
-                        continue
-
-                    # Сохраняем в StashApp
-                    success = await self.stash_client.save_telegram_file_id(
-                        image_id, file_id
-                    )
-
-                    if success:
-                        success_count += 1
-                    else:
-                        error_count += 1
-                        logger.warning(
-                            f"Не удалось сохранить file_id для изображения {image_id}"
-                        )
-
-                    # Логируем прогресс каждые 50 записей
-                    if idx % 50 == 0:
-                        logger.info(
-                            f"Прогресс миграции: {idx}/{total_count} "
-                            f"(успешно: {success_count}, ошибок: {error_count}, пропущено: {skipped_count})"
-                        )
-
-                except Exception as e:
-                    error_count += 1
-                    logger.error(
-                        f"Ошибка при миграции file_id для изображения {image_id}: {e}"
-                    )
-
-            logger.info("=" * 50)
-            logger.info("Миграция завершена:")
-            logger.info(f"  Всего записей: {total_count}")
-            logger.info(f"  Успешно мигрировано: {success_count}")
-            logger.info(f"  Пропущено (уже в StashApp): {skipped_count}")
-            logger.info(f"  Ошибок: {error_count}")
-            logger.info("=" * 50)
-
-        except Exception as e:
-            logger.error(f"Критическая ошибка при миграции file_id: {e}", exc_info=True)
 
     async def _initialize_cache(self):
         """

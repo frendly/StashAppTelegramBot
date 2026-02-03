@@ -1,85 +1,10 @@
 """Утилиты для профилирования и измерения производительности."""
 
-import functools
 import logging
 import time
-from collections.abc import Callable
-from contextlib import asynccontextmanager
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-
-def timing_decorator(operation_name: str):
-    """
-    Декоратор для измерения времени выполнения асинхронных функций.
-
-    Args:
-        operation_name: Название операции для логирования
-
-    Returns:
-        Декорированная функция
-
-    Example:
-        @timing_decorator("Database query")
-        async def get_data():
-            ...
-    """
-
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs) -> Any:
-            start = time.perf_counter()
-            try:
-                result = await func(*args, **kwargs)
-                duration = time.perf_counter() - start
-                logger.info(f"⏱️  {operation_name}: {duration:.3f}s")
-                return result
-            except Exception as e:
-                duration = time.perf_counter() - start
-                logger.error(f"⏱️  {operation_name}: {duration:.3f}s (FAILED: {e})")
-                raise
-
-        @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs) -> Any:
-            start = time.perf_counter()
-            try:
-                result = func(*args, **kwargs)
-                duration = time.perf_counter() - start
-                logger.info(f"⏱️  {operation_name}: {duration:.3f}s")
-                return result
-            except Exception as e:
-                duration = time.perf_counter() - start
-                logger.error(f"⏱️  {operation_name}: {duration:.3f}s (FAILED: {e})")
-                raise
-
-        # Проверяем, является ли функция корутиной
-        if functools.iscoroutinefunction(func):
-            return async_wrapper
-        else:
-            return sync_wrapper
-
-    return decorator
-
-
-@asynccontextmanager
-async def timing_context(operation_name: str):
-    """
-    Асинхронный контекстный менеджер для измерения времени выполнения блока кода.
-
-    Args:
-        operation_name: Название операции для логирования
-
-    Example:
-        async with timing_context("Processing data"):
-            await process_something()
-    """
-    start = time.perf_counter()
-    try:
-        yield
-    finally:
-        duration = time.perf_counter() - start
-        logger.info(f"⏱️  {operation_name}: {duration:.3f}s")
 
 
 class PerformanceTimer:

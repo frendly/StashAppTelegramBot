@@ -213,24 +213,3 @@ class StashClient:
     def reset_category_metrics(self, gallery_id: str | None = None):
         """Сброс метрик распределения категорий."""
         self._category_metrics.reset_category_metrics(gallery_id)
-
-    # Приватные методы для обратной совместимости (если используются где-то)
-    def _get_headers(self):
-        """Получение заголовков для запроса (приватный метод для обратной совместимости)."""
-        return self._client._get_headers()
-
-    async def _execute_query(self, query: str, variables: dict | None = None) -> dict:
-        """Выполнение GraphQL запроса (приватный метод для обратной совместимости)."""
-        return await self._client.execute_query(query, variables)
-
-    def _update_category_metrics(
-        self,
-        gallery_id: str,
-        selected_category: str,
-        actual_category: str,
-        used_fallback: bool = False,
-    ):
-        """Обновление метрик распределения категорий (приватный метод для обратной совместимости)."""
-        self._category_metrics.update_category_metrics(
-            gallery_id, selected_category, actual_category, used_fallback
-        )

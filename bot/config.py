@@ -66,7 +66,6 @@ class CacheConfig:
     """Конфигурация кеша изображений."""
 
     min_cache_size: int = 200
-    migrate_file_ids: bool = False
 
 
 @dataclass
@@ -155,7 +154,6 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
     cache_data = config_data.get("cache", {})
     cache_config = CacheConfig(
         min_cache_size=cache_data.get("min_cache_size", 200),
-        migrate_file_ids=cache_data.get("migrate_file_ids", False),
     )
 
     # Валидация конфигурации
