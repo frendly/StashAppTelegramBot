@@ -370,6 +370,50 @@ class VoteHandler:
 
             # Получаем информацию о галерее перед исключением
             gallery_pref = self.database.get_gallery_preference(gallery_id)
+
+            # Если галереи нет в БД, пытаемся получить из StashApp и создать запись
+            if not gallery_pref:
+                logger.info(
+                    f"Галерея {gallery_id} не найдена в БД, пытаемся получить из StashApp"
+                )
+                try:
+                    # Получаем список всех галерей из StashApp
+                    all_galleries = await self.stash_client.get_all_galleries_cached()
+                    gallery_info = next(
+                        (
+                            g
+                            for g in all_galleries
+                            if str(g.get("id")) == str(gallery_id)
+                        ),
+                        None,
+                    )
+
+                    if gallery_info:
+                        gallery_title = gallery_info.get("title", "Неизвестная галерея")
+                        # Создаем запись в БД
+                        self.database.ensure_gallery_exists(gallery_id, gallery_title)
+                        logger.info(
+                            f"Создана запись для галереи {gallery_id} ({gallery_title}) в БД"
+                        )
+                        # Получаем обновленную информацию
+                        gallery_pref = self.database.get_gallery_preference(gallery_id)
+                    else:
+                        logger.error(f"Галерея {gallery_id} не найдена в StashApp")
+                        await context.bot.send_message(
+                            chat_id=query.message.chat_id,
+                            text="❌ Галерея не найдена в StashApp.",
+                        )
+                        return
+                except Exception as e:
+                    logger.error(
+                        f"Ошибка при получении галереи из StashApp: {e}", exc_info=True
+                    )
+                    await context.bot.send_message(
+                        chat_id=query.message.chat_id,
+                        text="❌ Ошибка при получении информации о галерее.",
+                    )
+                    return
+
             if not gallery_pref:
                 logger.error(f"Галерея {gallery_id} не найдена в базе данных")
                 await context.bot.send_message(

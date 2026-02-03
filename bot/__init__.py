@@ -1,3 +1,3 @@
 """StashApp Telegram Bot - интеграция для отправки случайных фото из StashApp."""
 
-__version__ = "1.3.2"
+__version__ = "1.3.4"
