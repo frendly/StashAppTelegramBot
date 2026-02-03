@@ -38,11 +38,13 @@ class StashClient:
         # Создаем метрики
         self._category_metrics = CategoryMetrics()
 
-        # Создаем сервисы
+        # Создаем сервисы (важен порядок: gallery_service нужен для image_service и file_id_service)
+        self._gallery_service = GalleryService(self._client)
+
         self._image_service = ImageService(
             self._client, self._category_metrics, self._gallery_service
         )
-        self._gallery_service = GalleryService(self._client)
+
         self._rating_service = RatingService(self._client)
         self._file_id_service = FileIdService(self._client, self._gallery_service)
 
