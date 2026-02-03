@@ -73,42 +73,6 @@ class VoteHandler:
         """
         return user_id in self.config.telegram.allowed_user_ids
 
-    def _should_show_threshold_notification(self, gallery_id: str) -> bool:
-        """
-        Проверка, нужно ли показать уведомление о достижении порога исключения.
-
-        Args:
-            gallery_id: ID галереи
-
-        Returns:
-            bool: True если порог достигнут И уведомление еще не показывалось
-        """
-        if not self.voting_manager or not gallery_id:
-            return False
-
-        try:
-            # Проверяем, достигнут ли порог
-            threshold_reached, _ = self.voting_manager.check_exclusion_threshold(
-                gallery_id
-            )
-
-            if not threshold_reached:
-                return False
-
-            # Проверяем, показывалось ли уже уведомление
-            notification_shown = self.database.is_threshold_notification_shown(
-                gallery_id
-            )
-
-            # Показываем уведомление только если порог достигнут И уведомление еще не показывалось
-            return not notification_shown
-
-        except Exception as e:
-            logger.warning(
-                f"Ошибка при проверке показа уведомления о пороге для галереи {gallery_id}: {e}"
-            )
-            return False
-
     async def handle_vote_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
@@ -206,13 +170,6 @@ class VoteHandler:
             if result["error"]:
                 response_parts.append(f"⚠️ Ошибка: {result['error']}")
 
-            # Проверяем достижение порога после голосования
-            should_show_threshold = False
-            if image.gallery_id:
-                should_show_threshold = self._should_show_threshold_notification(
-                    image.gallery_id
-                )
-
             # Обновляем кнопки (отмечаем сделанный выбор)
             voted_keyboard = [
                 [
@@ -227,62 +184,26 @@ class VoteHandler:
                 ]
             ]
 
-            # Если порог достигнут, добавляем кнопку исключения и обновляем подпись
-            if should_show_threshold and image.gallery_id and image.gallery_title:
-                # Получаем обновленную статистику
-                gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
-                if gallery_stats:
-                    # Проверяем, было ли изображение предзагружено из служебного канала
-                    cached_file_id = self.database.get_file_id(
-                        image.id, use_high_quality=True
+            # Если дизлайк и есть информация о галерее, добавляем кнопку исключения
+            if vote < 0 and image.gallery_id and image.gallery_title:
+                exclude_button_text = f'🚫 Исключить "{image.gallery_title}"'
+                if len(exclude_button_text) > 64:
+                    exclude_button_text = (
+                        f'🚫 Исключить "{image.gallery_title[:50]}..."'
                     )
-                    is_preloaded_from_cache = cached_file_id is not None
-                    # Формируем новую подпись с порогом
-                    new_caption = self.caption_formatter.format_threshold_caption(
-                        image, gallery_stats, is_preloaded_from_cache
-                    )
-
-                    # Добавляем кнопку исключения
-                    exclude_button_text = f'🚫 Исключить "{image.gallery_title}"'
-                    if len(exclude_button_text) > 64:
-                        exclude_button_text = (
-                            f'🚫 Исключить "{image.gallery_title[:50]}..."'
+                voted_keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            exclude_button_text,
+                            callback_data=f"exclude_gallery_{image.gallery_id}",
                         )
-                    voted_keyboard.append(
-                        [
-                            InlineKeyboardButton(
-                                exclude_button_text,
-                                callback_data=f"exclude_gallery_{image.gallery_id}",
-                            )
-                        ]
-                    )
-
-                    # Обновляем подпись и кнопки в сообщении
-                    try:
-                        await query.edit_message_caption(
-                            caption=new_caption,
-                            parse_mode="HTML",
-                            reply_markup=InlineKeyboardMarkup(voted_keyboard),
-                        )
-                    except Exception as e:
-                        logger.warning(f"Не удалось обновить подпись сообщения: {e}")
-                        # Если не удалось обновить подпись, просто обновляем кнопки
-                        await query.edit_message_reply_markup(
-                            reply_markup=InlineKeyboardMarkup(voted_keyboard)
-                        )
-
-                    # Отмечаем уведомление как показанное
-                    self.database.mark_threshold_notification_shown(image.gallery_id)
-                else:
-                    # Если статистики нет, просто обновляем кнопки
-                    await query.edit_message_reply_markup(
-                        reply_markup=InlineKeyboardMarkup(voted_keyboard)
-                    )
-            else:
-                # Порог не достигнут, просто обновляем кнопки
-                await query.edit_message_reply_markup(
-                    reply_markup=InlineKeyboardMarkup(voted_keyboard)
+                    ]
                 )
+
+            # Обновляем кнопки в сообщении
+            await query.edit_message_reply_markup(
+                reply_markup=InlineKeyboardMarkup(voted_keyboard)
+            )
 
             # Отправляем сообщение с результатом голосования
             await context.bot.send_message(
