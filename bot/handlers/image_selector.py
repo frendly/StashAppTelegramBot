@@ -170,8 +170,9 @@ class ImageSelector:
             image = await self.stash_client.get_random_image_from_cache(exclude_ids)
 
             if image:
+                gallery_title = image.get_gallery_title() or "не указана"
                 logger.debug(
-                    f"Изображение получено из кеша: {image.id} (галерея: {image.gallery_title})"
+                    f"Изображение получено из кеша: {image.id} (галерея: {gallery_title})"
                 )
                 return image
             else:

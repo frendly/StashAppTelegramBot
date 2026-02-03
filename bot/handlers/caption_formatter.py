@@ -102,6 +102,19 @@ class CaptionFormatter:
         # Форматирование: [██████░░░░] 60% (12/20)
         return f"{color_emoji} {progress_bar} {negative_percentage:.0f}% ({negative_votes}/{total_images})"
 
+    def _get_gallery_title(self, image: StashImage) -> str:
+        """
+        Получение названия галереи с fallback на имя папки.
+
+        Args:
+            image: Объект изображения
+
+        Returns:
+            str: Название галереи или "не указан"
+        """
+        title = image.get_gallery_title()
+        return title if title else "не указан"
+
     def format_caption(
         self, image: StashImage, is_preloaded_from_cache: bool = False
     ) -> str:
@@ -128,11 +141,14 @@ class CaptionFormatter:
         )
         performer_text = ", ".join(performer_names) if performer_names else "не указан"
 
+        # Получаем название галереи (с fallback на имя папки)
+        gallery_title = self._get_gallery_title(image)
+
         # Если нет галереи, используем упрощенный формат
-        if not image.gallery_id or not image.gallery_title:
+        if not image.gallery_id:
             caption_parts = []
             caption_parts.append(f"👤 Перформер: {performer_text}")
-            caption_parts.append("📊 Галерея: не указан")
+            caption_parts.append(f"📊 Галерея: {gallery_title}")
             if image.title and image.title != "Без названия":
                 caption_parts.append(f"<b>{image.title}</b>")
             if is_preloaded_from_cache:
@@ -147,7 +163,7 @@ class CaptionFormatter:
             if not gallery_stats or gallery_stats.get("total_images", 0) == 0:
                 caption_parts = []
                 caption_parts.append(f"👤 Перформер: {performer_text}")
-                caption_parts.append(f'📊 Галерея: "{image.gallery_title}"')
+                caption_parts.append(f'📊 Галерея: "{gallery_title}"')
                 if image.title and image.title != "Без названия":
                     caption_parts.append(f"<b>{image.title}</b>")
                 if is_preloaded_from_cache:
@@ -163,7 +179,7 @@ class CaptionFormatter:
             caption_parts.append(f"👤 Перформер: {performer_text}")
 
             # Галерея
-            caption_parts.append(f'📊 Галерея: "{image.gallery_title}"')
+            caption_parts.append(f'📊 Галерея: "{gallery_title}"')
 
             # Вес и рейтинг
             try:
@@ -210,10 +226,7 @@ class CaptionFormatter:
             # Fallback на упрощенный формат
             caption_parts = []
             caption_parts.append(f"👤 Перформер: {performer_text}")
-            if image.gallery_title:
-                caption_parts.append(f'📊 Галерея: "{image.gallery_title}"')
-            else:
-                caption_parts.append("📊 Галерея: не указан")
+            caption_parts.append(f'📊 Галерея: "{gallery_title}"')
             if image.title and image.title != "Без названия":
                 caption_parts.append(f"<b>{image.title}</b>")
             if is_preloaded_from_cache:
@@ -260,10 +273,8 @@ class CaptionFormatter:
         caption_parts.append(f"👤 Перформер: {performer_text}")
 
         # Галерея
-        if image.gallery_title:
-            caption_parts.append(f'📊 Галерея: "{image.gallery_title}"')
-        else:
-            caption_parts.append("📊 Галерея: не указан")
+        gallery_title = self._get_gallery_title(image)
+        caption_parts.append(f'📊 Галерея: "{gallery_title}"')
 
         # Прогресс-бар
         total_images = gallery_stats.get("total_images", 0)

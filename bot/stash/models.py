@@ -37,9 +37,12 @@ class StashImage:
             self.gallery_id = gallery["id"]
             self.gallery_title = gallery.get("title")
 
+            # Сохраняем folder для возможного использования в форматтере
+            self.gallery_folder = gallery.get("folder")
+
             # Если title пустой, извлекаем название из пути к папке
             if not self.gallery_title or self.gallery_title.strip() == "":
-                folder = gallery.get("folder")
+                folder = self.gallery_folder
                 if folder:
                     folder_path = folder.get("path", "")
                     if folder_path:
@@ -51,6 +54,7 @@ class StashImage:
         else:
             self.gallery_id = None
             self.gallery_title = None
+            self.gallery_folder = None
 
         # Информация о перформерах
         self.performers = [
@@ -78,6 +82,27 @@ class StashImage:
         else:
             # Для быстрой загрузки используем thumbnail, fallback на preview и image
             return self._thumbnail_url or self._preview_url or self._image_url
+
+    def get_gallery_title(self) -> str | None:
+        """
+        Получение названия галереи с fallback на имя папки.
+
+        Returns:
+            str | None: Название галереи или None, если не найдено
+        """
+        # Если есть gallery_title, используем его
+        if self.gallery_title and self.gallery_title.strip():
+            return self.gallery_title
+
+        # Если нет gallery_title, пытаемся извлечь из folder
+        if self.gallery_folder:
+            folder_path = self.gallery_folder.get("path", "")
+            if folder_path:
+                folder_name = os.path.basename(folder_path.rstrip("/"))
+                if folder_name:
+                    return folder_name
+
+        return None
 
     def __repr__(self):
         return f"StashImage(id={self.id}, title={self.title}, rating={self.rating}, gallery={self.gallery_title})"

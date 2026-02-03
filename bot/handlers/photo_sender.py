@@ -198,13 +198,12 @@ class PhotoSender:
             ]
 
             # Добавление кнопки исключения, если порог достигнут
-            if should_show_threshold and image.gallery_id and image.gallery_title:
-                exclude_button_text = f'🚫 Исключить "{image.gallery_title}"'
+            gallery_title = image.get_gallery_title()
+            if should_show_threshold and image.gallery_id and gallery_title:
+                exclude_button_text = f'🚫 Исключить "{gallery_title}"'
                 # Ограничиваем длину текста кнопки (Telegram имеет лимит)
                 if len(exclude_button_text) > 64:
-                    exclude_button_text = (
-                        f'🚫 Исключить "{image.gallery_title[:50]}..."'
-                    )
+                    exclude_button_text = f'🚫 Исключить "{gallery_title[:50]}..."'
                 keyboard.append(
                     [
                         InlineKeyboardButton(

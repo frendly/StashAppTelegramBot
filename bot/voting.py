@@ -70,11 +70,13 @@ class VotingManager:
             performer_ids = [p["id"] for p in image.performers]
             performer_names = [p["name"] for p in image.performers]
 
+            gallery_title = image.get_gallery_title()
+
             self.database.add_vote(
                 image_id=image.id,
                 vote=vote,
                 gallery_id=image.gallery_id,
-                gallery_title=image.gallery_title,
+                gallery_title=gallery_title,
                 performer_ids=performer_ids,
                 performer_names=performer_names,
             )
@@ -90,14 +92,15 @@ class VotingManager:
                 logger.debug(f"Обновлены предпочтения перформера: {performer['name']}")
 
             # 4. Обновляем предпочтения по галерее (если есть)
-            if image.gallery_id and image.gallery_title:
+            gallery_title = image.get_gallery_title()
+            if image.gallery_id and gallery_title:
                 should_update_gallery = self.database.update_gallery_preference(
                     gallery_id=image.gallery_id,
-                    gallery_title=image.gallery_title,
+                    gallery_title=gallery_title,
                     vote=vote,
                 )
 
-                result["gallery_updated"] = image.gallery_title
+                result["gallery_updated"] = gallery_title
 
                 # 4.1. Обновляем вес галереи с учетом коэффициента k=0.2
                 try:
@@ -105,7 +108,7 @@ class VotingManager:
                         image.gallery_id, vote
                     )
                     logger.debug(
-                        f"Вес галереи '{image.gallery_title}' обновлен: {new_weight:.3f}"
+                        f"Вес галереи '{gallery_title}' обновлен: {new_weight:.3f}"
                     )
                     # Инвалидируем кэш весов после обновления
                     self.invalidate_weights_cache()
@@ -130,8 +133,9 @@ class VotingManager:
                             self.database.update_gallery_image_count(
                                 image.gallery_id, image_count
                             )
+                            gallery_title = image.get_gallery_title() or "неизвестная"
                             logger.debug(
-                                f"Количество изображений для галереи '{image.gallery_title}' обновлено: {image_count}"
+                                f"Количество изображений для галереи '{gallery_title}' обновлено: {image_count}"
                             )
                         else:
                             logger.warning(
@@ -163,8 +167,9 @@ class VotingManager:
                         if gallery_rating_updated:
                             self.database.mark_gallery_rating_set(image.gallery_id)
                             result["gallery_rating_updated"] = True
+                            gallery_title = image.get_gallery_title() or "неизвестная"
                             logger.info(
-                                f"Рейтинг галереи '{image.gallery_title}' установлен на {avg_rating}/5"
+                                f"Рейтинг галереи '{gallery_title}' установлен на {avg_rating}/5"
                             )
 
             logger.info(f"Голос обработан: image={image.id}, vote={vote}")
