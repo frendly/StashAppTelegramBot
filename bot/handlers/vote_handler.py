@@ -1,7 +1,6 @@
 """Обработка голосования."""
 
 import logging
-import time
 from typing import TYPE_CHECKING, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -33,7 +32,6 @@ class VoteHandler:
         photo_sender: Optional["PhotoSender"] = None,
         last_sent_images: dict[int, StashImage] | None = None,
         last_sent_image_id: dict[int, str] | None = None,
-        last_command_time: dict[int, float] | None = None,
         check_authorization=None,
     ):
         """
@@ -49,8 +47,7 @@ class VoteHandler:
             photo_sender: Отправитель фото (опционально, для отправки нового фото после голосования)
             last_sent_images: Кэш последних отправленных изображений
             last_sent_image_id: Кэш ID последнего отправленного изображения
-            last_command_time: Кэш времени последней команды (для rate limiting)
-            check_authorization: Функция проверки авторизации с rate limiting (опционально)
+            check_authorization: Функция проверки авторизации (опционально)
         """
         self.config = config
         self.stash_client = stash_client
@@ -61,7 +58,6 @@ class VoteHandler:
         self.photo_sender = photo_sender
         self._last_sent_images = last_sent_images or {}
         self._last_sent_image_id = last_sent_image_id or {}
-        self._last_command_time = last_command_time or {}
         self.check_authorization = check_authorization
 
     def _is_authorized(self, user_id: int) -> bool:
@@ -257,23 +253,7 @@ class VoteHandler:
 
             # Отправляем новое изображение только если нужно
             if should_send_new_image:
-                # Rate limiting - не чаще 1 раза в 2 секунды
                 chat_id = query.message.chat_id
-                now = time.time()
-                if user_id in self._last_command_time:
-                    time_passed = now - self._last_command_time[user_id]
-                    if time_passed < 2:
-                        wait_time = int(2 - time_passed)
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text=f"⏳ Подождите {wait_time} секунд перед следующим запросом.",
-                        )
-                        logger.warning(
-                            f"Rate limit для user_id={user_id}, осталось {wait_time}с"
-                        )
-                        return
-
-                self._last_command_time[user_id] = now
 
                 # Отправка сообщения о загрузке
                 loading_msg = await context.bot.send_message(

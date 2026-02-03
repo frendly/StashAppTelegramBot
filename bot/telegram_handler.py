@@ -53,8 +53,7 @@ class TelegramHandler:
         self.voting_manager = voting_manager
         self.application: Application | None = None
 
-        # Кэши для rate limiting и последних отправленных изображений
-        self._last_command_time: dict[int, float] = {}
+        # Кэши для последних отправленных изображений
         self._last_sent_images: dict[int, StashImage] = {}
         self._last_sent_image_id: dict[int, str] = {}
         self._last_unauthorized_message_time: dict[int, float] = {}
@@ -84,7 +83,6 @@ class TelegramHandler:
             photo_sender=self.photo_sender,
             last_sent_images=self._last_sent_images,
             last_sent_image_id=self._last_sent_image_id,
-            last_command_time=self._last_command_time,
         )
 
         # Настраиваем check_authorization в обработчиках
@@ -97,26 +95,6 @@ class TelegramHandler:
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /help."""
         await self.command_handler.help_command(update, context)
-
-    def _check_rate_limit(self, user_id: int) -> int | None:
-        """
-        Проверка rate limiting для пользователя.
-
-        Args:
-            user_id: ID пользователя
-
-        Returns:
-            Optional[int]: Количество секунд ожидания, если превышен лимит, иначе None
-        """
-        now = time.time()
-        if user_id in self._last_command_time:
-            time_passed = now - self._last_command_time[user_id]
-            if time_passed < 2:
-                wait_time = int(2 - time_passed)
-                return wait_time
-
-        self._last_command_time[user_id] = now
-        return None
 
     async def check_authorization(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -183,16 +161,6 @@ class TelegramHandler:
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
 
-        # Rate limiting - не чаще 1 раза в 2 секунды
-        wait_time = self._check_rate_limit(user_id)
-        if wait_time is not None:
-            await update.message.reply_text(
-                f"⏳ Подождите {wait_time} секунд перед следующим запросом.",
-                reply_markup=self.command_handler._get_persistent_keyboard(),
-            )
-            logger.warning(f"Rate limit для user_id={user_id}, осталось {wait_time}с")
-            return
-
         logger.info(f"Команда /random от user_id={user_id}")
 
         # Отправка сообщения о загрузке
@@ -224,18 +192,6 @@ class TelegramHandler:
 
         # Обработка кнопки Random
         if text == "💕 Random":
-            # Rate limiting - не чаще 1 раза в 2 секунды
-            wait_time = self._check_rate_limit(user_id)
-            if wait_time is not None:
-                await update.message.reply_text(
-                    f"⏳ Подождите {wait_time} секунд перед следующим запросом.",
-                    reply_markup=self.command_handler._get_persistent_keyboard(),
-                )
-                logger.warning(
-                    f"Rate limit для user_id={user_id}, осталось {wait_time}с"
-                )
-                return
-
             logger.info(f"Кнопка Random от user_id={user_id}")
 
             # Отправка сообщения о загрузке
