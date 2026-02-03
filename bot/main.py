@@ -15,24 +15,18 @@ from telegram.ext import Application
 
 from bot.config import BotConfig, load_config
 from bot.database import Database
+from bot.logging_config import setup_logging
 from bot.scheduler import Scheduler
 from bot.stash_client import StashClient
 from bot.telegram_handler import TelegramHandler
 from bot.voting import VotingManager
 
-# Настройка логирования
-log_path = os.getenv("LOG_PATH", "bot.log")
-os.makedirs(
-    os.path.dirname(log_path) if os.path.dirname(log_path) else ".", exist_ok=True
-)
-
+# Базовая настройка логирования (до загрузки конфигурации)
+# Будет переконфигурировано после загрузки config
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_path, encoding="utf-8"),
-    ],
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
 logger = logging.getLogger(__name__)
@@ -41,12 +35,13 @@ logger = logging.getLogger(__name__)
 class Bot:
     """Главный класс бота."""
 
-    def __init__(self, config_path: str = "config.yml"):
+    def __init__(self, config_path: str | None = None, config: BotConfig | None = None):
         """
         Инициализация бота.
 
         Args:
-            config_path: Путь к конфигурационному файлу
+            config_path: Путь к конфигурационному файлу (используется если config не передан)
+            config: Объект конфигурации (если передан, config_path игнорируется)
         """
         self.config: BotConfig = None
         self.database: Database = None
@@ -55,7 +50,8 @@ class Bot:
         self.telegram_handler: TelegramHandler = None
         self.scheduler: Scheduler = None
         self.application: Application = None
-        self.config_path = config_path
+        self.config_path = config_path or "config.yml"
+        self._preloaded_config = config  # Сохраняем предзагруженную конфигурацию
         self._shutdown_event = asyncio.Event()
         self._web_app_runner: web.AppRunner | None = None
 
@@ -67,8 +63,15 @@ class Bot:
             logger.info("=" * 50)
 
             # Загрузка конфигурации
-            logger.info(f"Загрузка конфигурации из {self.config_path}")
-            self.config = load_config(self.config_path)
+            if self._preloaded_config:
+                # Используем предзагруженную конфигурацию
+                logger.info("Использование предзагруженной конфигурации")
+                self.config = self._preloaded_config
+            else:
+                # Загружаем конфигурацию из файла
+                logger.info(f"Загрузка конфигурации из {self.config_path}")
+                self.config = load_config(self.config_path)
+
             logger.info(
                 f"Конфигурация загружена. Разрешенные пользователи: {self.config.telegram.allowed_user_ids}"
             )
@@ -490,8 +493,30 @@ async def main():
         logger.error("❌ Конфигурационный файл не найден. Создайте config.yml")
         sys.exit(1)
 
-    # Создание и запуск бота
-    bot = Bot(str(config_path))
+    # Загрузка конфигурации
+    try:
+        config = load_config(str(config_path))
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки конфигурации: {e}")
+        sys.exit(1)
+
+    # Настройка логирования на основе конфигурации
+    if config.logging:
+        setup_logging(
+            log_path=config.logging.log_path,
+            log_level=config.logging.log_level,
+            json_format=config.logging.json_format,
+            console_format=config.logging.console_format,
+            rotation=config.logging.rotation,
+        )
+    else:
+        # Fallback на значения по умолчанию
+        log_path = os.getenv("LOG_PATH", "bot.log")
+        log_level = os.getenv("LOG_LEVEL", "INFO")
+        setup_logging(log_path=log_path, log_level=log_level)
+
+    # Создание и запуск бота (передаем уже загруженную конфигурацию)
+    bot = Bot(config=config)
 
     # Настройка обработчиков сигналов
     signal.signal(signal.SIGINT, bot.signal_handler)

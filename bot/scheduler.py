@@ -10,6 +10,7 @@ from pytz import timezone as pytz_timezone
 from telegram.error import RetryAfter, TelegramError
 
 from bot.config import BotConfig
+from bot.logging_config import set_request_context
 from bot.telegram_handler import TelegramHandler
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,9 @@ class Scheduler:
         Args:
             user_id: Telegram ID пользователя
         """
+        # Установка контекста для логирования
+        set_request_context(user_id_value=user_id)
+
         try:
             logger.info(f"Выполнение запланированной отправки для user_id={user_id}")
             await self.telegram_handler.send_scheduled_photo(
@@ -166,6 +170,9 @@ class Scheduler:
 
         Обновляет количество изображений для всех галерей, которым нужно обновление.
         """
+        # Установка контекста для логирования
+        set_request_context()
+
         if not self.database or not self.stash_client:
             logger.warning(
                 "Не удалось обновить статистику: database или stash_client не инициализированы"
@@ -245,6 +252,9 @@ class Scheduler:
         - Экспоненциальный backoff при ошибках
         - Защита от бана (проверка на блокировку)
         """
+        # Установка контекста для логирования
+        set_request_context()
+
         if not self.database or not self.stash_client or not self.telegram_handler:
             logger.warning(
                 "Не удалось предзагрузить изображения: database, stash_client или telegram_handler не инициализированы"

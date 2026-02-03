@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes
 from bot.config import BotConfig
 from bot.database import Database
 from bot.handlers.caption_formatter import CaptionFormatter
+from bot.logging_config import set_request_context
 from bot.stash_client import StashClient, StashImage
 
 if TYPE_CHECKING:
@@ -111,6 +112,12 @@ class VoteHandler:
 
             vote_type = parts[1]  # "up" или "down"
             image_id = parts[2]
+
+            # Установка контекста для логирования
+            set_request_context(
+                user_id_value=user_id,
+                image_id_value=image_id,
+            )
 
             vote = 1 if vote_type == "up" else -1
 
@@ -350,6 +357,12 @@ class VoteHandler:
                     text="❌ Ошибка: не удалось определить галерею.",
                 )
                 return
+
+            # Установка контекста для логирования
+            set_request_context(
+                user_id_value=user_id,
+                gallery_id_value=gallery_id,
+            )
 
             # Получаем информацию о галерее перед исключением
             gallery_pref = self.database.get_gallery_preference(gallery_id)

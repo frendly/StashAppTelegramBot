@@ -12,6 +12,7 @@ from bot.config import BotConfig
 from bot.database import Database
 from bot.handlers.caption_formatter import CaptionFormatter
 from bot.handlers.image_selector import ImageSelector
+from bot.logging_config import set_request_context
 from bot.performance import PerformanceTimer
 from bot.stash_client import StashClient, StashImage
 
@@ -139,6 +140,12 @@ class PhotoSender:
                         text="⏳ Кеш пуст. Подождите, пока изображения будут предзагружены в служебный канал.",
                     )
                 return False
+
+            # Установка контекста для логирования
+            set_request_context(
+                image_id_value=image.id,
+                gallery_id_value=image.gallery_id,
+            )
 
             # Получаем file_id из объекта изображения (уже загружен из кеша)
             file_id = image.telegram_file_id

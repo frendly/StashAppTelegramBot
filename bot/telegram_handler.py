@@ -20,6 +20,7 @@ from bot.handlers.command_handler import CommandHandler as CmdHandler
 from bot.handlers.image_selector import ImageSelector
 from bot.handlers.photo_sender import PhotoSender
 from bot.handlers.vote_handler import VoteHandler
+from bot.logging_config import set_request_context
 from bot.stash_client import StashClient, StashImage
 
 if TYPE_CHECKING:
@@ -161,6 +162,9 @@ class TelegramHandler:
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
 
+        # Установка контекста для логирования
+        set_request_context(user_id_value=user_id)
+
         logger.info(f"Команда /random от user_id={user_id}")
 
         # Отправка сообщения о загрузке
@@ -189,6 +193,9 @@ class TelegramHandler:
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         text = update.message.text
+
+        # Установка контекста для логирования
+        set_request_context(user_id_value=user_id)
 
         # Обработка кнопки Random
         if text == "💕 Random":
@@ -230,6 +237,9 @@ class TelegramHandler:
             chat_id: ID чата для отправки
             user_id: ID пользователя (для работы кнопок голосования)
         """
+        # Установка контекста для логирования
+        set_request_context(user_id_value=user_id)
+
         logger.info(
             f"Отправка запланированного фото в chat_id={chat_id}, user_id={user_id}"
         )
@@ -247,18 +257,27 @@ class TelegramHandler:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Обработчик callback для голосования."""
+        # Установка контекста для логирования
+        if update.effective_user:
+            set_request_context(user_id_value=update.effective_user.id)
         await self.vote_handler.handle_vote_callback(update, context)
 
     async def handle_voted_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Обработчик callback для уже проголосованных кнопок."""
+        # Установка контекста для логирования
+        if update.effective_user:
+            set_request_context(user_id_value=update.effective_user.id)
         await self.vote_handler.handle_voted_callback(update, context)
 
     async def handle_exclude_gallery_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Обработчик callback для исключения галереи."""
+        # Установка контекста для логирования
+        if update.effective_user:
+            set_request_context(user_id_value=update.effective_user.id)
         await self.vote_handler.handle_exclude_gallery_callback(update, context)
 
     def setup_handlers(self, application: Application):

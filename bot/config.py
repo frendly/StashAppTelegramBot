@@ -69,6 +69,17 @@ class CacheConfig:
 
 
 @dataclass
+class LoggingConfig:
+    """Конфигурация логирования."""
+
+    json_format: bool = True
+    log_path: str = "bot.log"
+    log_level: str = "INFO"
+    console_format: str = "text"
+    rotation: dict | None = None
+
+
+@dataclass
 class BotConfig:
     """Общая конфигурация бота."""
 
@@ -78,6 +89,7 @@ class BotConfig:
     history: HistoryConfig
     database: DatabaseConfig
     cache: CacheConfig | None = None
+    logging: LoggingConfig | None = None
 
 
 def load_config(config_path: str = "config.yml") -> BotConfig:
@@ -156,6 +168,25 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
         min_cache_size=cache_data.get("min_cache_size", 200),
     )
 
+    # Конфигурация логирования (опционально)
+    logging_data = config_data.get("logging", {})
+    logging_config = None
+    if logging_data:
+        rotation_data = logging_data.get("rotation")
+        logging_config = LoggingConfig(
+            json_format=logging_data.get("json_format", True),
+            log_path=os.getenv("LOG_PATH") or logging_data.get("log_path", "bot.log"),
+            log_level=os.getenv("LOG_LEVEL") or logging_data.get("log_level", "INFO"),
+            console_format=logging_data.get("console_format", "text"),
+            rotation=rotation_data if rotation_data else None,
+        )
+    else:
+        # Значения по умолчанию, если секция logging отсутствует
+        logging_config = LoggingConfig(
+            log_path=os.getenv("LOG_PATH", "bot.log"),
+            log_level=os.getenv("LOG_LEVEL", "INFO"),
+        )
+
     # Валидация конфигурации
     if (
         not telegram_config.bot_token
@@ -190,4 +221,5 @@ def load_config(config_path: str = "config.yml") -> BotConfig:
         history=history_config,
         database=database_config,
         cache=cache_config,
+        logging=logging_config,
     )
