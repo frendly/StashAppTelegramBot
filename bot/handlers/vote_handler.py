@@ -391,32 +391,47 @@ class VoteHandler:
                     if gallery_info:
                         # Используем ID из StashApp для консистентности
                         stash_gallery_id = str(gallery_info.get("id"))
-                        gallery_title = gallery_info.get("title", "Неизвестная галерея")
+                        # Обрабатываем случай, когда title может быть None или пустой строкой
+                        gallery_title = (
+                            gallery_info.get("title") or "Неизвестная галерея"
+                        )
                         # Создаем запись в БД с ID из StashApp
                         created = self.database.ensure_gallery_exists(
                             stash_gallery_id, gallery_title
                         )
+                        # Обновляем gallery_id для дальнейшего использования
+                        gallery_id = stash_gallery_id
+                        # Получаем информацию о галерее
+                        gallery_pref = self.database.get_gallery_preference(gallery_id)
+
                         if created:
                             logger.info(
                                 f"Создана запись для галереи {stash_gallery_id} ({gallery_title}) в БД"
                             )
+                            if not gallery_pref:
+                                logger.error(
+                                    f"Галерея {gallery_id} не найдена в БД после создания записи"
+                                )
+                                await context.bot.send_message(
+                                    chat_id=query.message.chat_id,
+                                    text="❌ Галерея не найдена в базе данных.",
+                                )
+                                return
                         else:
-                            logger.info(
-                                f"Галерея {stash_gallery_id} ({gallery_title}) уже существует в БД"
-                            )
-                        # Обновляем gallery_id для дальнейшего использования
-                        gallery_id = stash_gallery_id
-                        # Получаем обновленную информацию
-                        gallery_pref = self.database.get_gallery_preference(gallery_id)
-                        if not gallery_pref:
-                            logger.error(
-                                f"Галерея {gallery_id} не найдена в БД после создания записи"
-                            )
-                            await context.bot.send_message(
-                                chat_id=query.message.chat_id,
-                                text="❌ Галерея не найдена в базе данных.",
-                            )
-                            return
+                            # Проверяем, действительно ли галерея существует, или была ошибка
+                            if gallery_pref:
+                                logger.info(
+                                    f"Галерея {stash_gallery_id} ({gallery_title}) уже существует в БД"
+                                )
+                            else:
+                                logger.error(
+                                    f"Не удалось создать галерею {stash_gallery_id} в БД (возможно, пустые параметры)"
+                                )
+                                await context.bot.send_message(
+                                    chat_id=query.message.chat_id,
+                                    text="❌ Ошибка: не удалось создать запись о галерее в базе данных.",
+                                )
+                                return
                     else:
                         logger.error(f"Галерея {gallery_id} не найдена в StashApp")
                         await context.bot.send_message(
