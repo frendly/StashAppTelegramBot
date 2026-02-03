@@ -57,6 +57,7 @@ class TelegramHandler:
         self._last_command_time: dict[int, float] = {}
         self._last_sent_images: dict[int, StashImage] = {}
         self._last_sent_image_id: dict[int, str] = {}
+        self._last_unauthorized_message_time: dict[int, float] = {}
 
         # Создаем обработчики
         self.caption_formatter = CaptionFormatter(database)
@@ -86,6 +87,9 @@ class TelegramHandler:
             last_command_time=self._last_command_time,
         )
 
+        # Настраиваем check_authorization в обработчиках
+        self._setup_authorization_handlers()
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start."""
         await self.command_handler.start_command(update, context)
@@ -114,14 +118,70 @@ class TelegramHandler:
         self._last_command_time[user_id] = now
         return None
 
+    async def check_authorization(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> bool:
+        """
+        Единая проверка авторизации с rate limiting для сообщений об отсутствии доступа.
+
+        Args:
+            update: Обновление от Telegram
+            context: Контекст бота
+
+        Returns:
+            bool: True если пользователь авторизован, False если нет
+        """
+        user_id = update.effective_user.id
+
+        # Проверка авторизации
+        if self.command_handler._is_authorized(user_id):
+            return True
+
+        # Если не авторизован, проверяем rate limiting (30 секунд)
+        now = time.time()
+        if user_id in self._last_unauthorized_message_time:
+            time_passed = now - self._last_unauthorized_message_time[user_id]
+            if time_passed < 30:
+                # Пропускаем отправку сообщения, чтобы не спамить
+                return False
+
+        # Обновляем время последней отправки
+        self._last_unauthorized_message_time[user_id] = now
+
+        # Отправляем сообщение через правильный API
+        message = "❌ У вас нет доступа к этому боту."
+        if update.callback_query:
+            # Для callback query используем query.answer
+            await update.callback_query.answer(message, show_alert=False)
+        elif update.message:
+            # Для обычных сообщений используем reply_text
+            await update.message.reply_text(message)
+        else:
+            # Если нет ни message, ни callback_query, просто логируем
+            logger.warning(
+                f"Неавторизованная попытка доступа: user_id={user_id} (неизвестный тип update)"
+            )
+            return False
+
+        logger.warning(f"Неавторизованная попытка доступа: user_id={user_id}")
+        return False
+
+    def _setup_authorization_handlers(self):
+        """
+        Настройка check_authorization в обработчиках после создания метода.
+        Вызывается после создания всех обработчиков.
+        """
+        # Передаем bound method check_authorization в обработчики
+        self.command_handler.check_authorization = self.check_authorization
+        self.vote_handler.check_authorization = self.check_authorization
+
     async def random_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /random."""
+        if not await self.check_authorization(update, context):
+            return
+
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
-
-        if not self.command_handler._is_authorized(user_id):
-            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
-            return
 
         # Rate limiting - не чаще 1 раза в 2 секунды
         wait_time = self._check_rate_limit(user_id)
@@ -155,13 +215,12 @@ class TelegramHandler:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Обработчик текстовых сообщений (кнопка Random)."""
+        if not await self.check_authorization(update, context):
+            return
+
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
         text = update.message.text
-
-        if not self.command_handler._is_authorized(user_id):
-            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
-            return
 
         # Обработка кнопки Random
         if text == "💕 Random":

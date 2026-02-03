@@ -14,7 +14,13 @@ logger = logging.getLogger(__name__)
 class CommandHandler:
     """Класс для обработки команд Telegram бота."""
 
-    def __init__(self, config: BotConfig, database: Database, voting_manager=None):
+    def __init__(
+        self,
+        config: BotConfig,
+        database: Database,
+        voting_manager=None,
+        check_authorization=None,
+    ):
         """
         Инициализация обработчика команд.
 
@@ -22,10 +28,12 @@ class CommandHandler:
             config: Конфигурация бота
             database: База данных
             voting_manager: Менеджер голосования (опционально)
+            check_authorization: Функция проверки авторизации с rate limiting (опционально)
         """
         self.config = config
         self.database = database
         self.voting_manager = voting_manager
+        self.check_authorization = check_authorization
 
     def _is_authorized(self, user_id: int) -> bool:
         """
@@ -53,12 +61,10 @@ class CommandHandler:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start."""
-        user_id = update.effective_user.id
-
-        if not self._is_authorized(user_id):
-            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
-            logger.warning(f"Неавторизованная попытка доступа: user_id={user_id}")
+        if not await self.check_authorization(update, context):
             return
+
+        user_id = update.effective_user.id
 
         welcome_message = (
             "👋 <b>Привет! Я бот для StashApp.</b>\n\n"
@@ -80,11 +86,10 @@ class CommandHandler:
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /help."""
-        user_id = update.effective_user.id
-
-        if not self._is_authorized(user_id):
-            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
+        if not await self.check_authorization(update, context):
             return
+
+        user_id = update.effective_user.id
 
         help_message = (
             "<b>📖 Справка по боту StashApp</b>\n\n"
@@ -113,11 +118,10 @@ class CommandHandler:
 
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /stats."""
-        user_id = update.effective_user.id
-
-        if not self._is_authorized(user_id):
-            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
+        if not await self.check_authorization(update, context):
             return
+
+        user_id = update.effective_user.id
 
         logger.info(f"Команда /stats от user_id={user_id}")
 
@@ -157,11 +161,10 @@ class CommandHandler:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Обработчик команды /preferences."""
-        user_id = update.effective_user.id
-
-        if not self._is_authorized(user_id):
-            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
+        if not await self.check_authorization(update, context):
             return
+
+        user_id = update.effective_user.id
 
         if not self.voting_manager:
             await update.message.reply_text("⚠️ Система голосования недоступна.")
@@ -252,12 +255,10 @@ class CommandHandler:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Обработчик текстовых сообщений (кнопка Random)."""
-        user_id = update.effective_user.id
-        text = update.message.text
-
-        if not self._is_authorized(user_id):
-            await update.message.reply_text("❌ У вас нет доступа к этому боту.")
+        if not await self.check_authorization(update, context):
             return
+
+        text = update.message.text
 
         # Обработка кнопки Random
         if text == "💕 Random":

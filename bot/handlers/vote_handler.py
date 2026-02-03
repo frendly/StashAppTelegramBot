@@ -34,6 +34,7 @@ class VoteHandler:
         last_sent_images: dict[int, StashImage] | None = None,
         last_sent_image_id: dict[int, str] | None = None,
         last_command_time: dict[int, float] | None = None,
+        check_authorization=None,
     ):
         """
         Инициализация обработчика голосования.
@@ -49,6 +50,7 @@ class VoteHandler:
             last_sent_images: Кэш последних отправленных изображений
             last_sent_image_id: Кэш ID последнего отправленного изображения
             last_command_time: Кэш времени последней команды (для rate limiting)
+            check_authorization: Функция проверки авторизации с rate limiting (опционально)
         """
         self.config = config
         self.stash_client = stash_client
@@ -60,6 +62,7 @@ class VoteHandler:
         self._last_sent_images = last_sent_images or {}
         self._last_sent_image_id = last_sent_image_id or {}
         self._last_command_time = last_command_time or {}
+        self.check_authorization = check_authorization
 
     def _is_authorized(self, user_id: int) -> bool:
         """
@@ -84,12 +87,12 @@ class VoteHandler:
             context: Контекст бота
         """
         query = update.callback_query
-        user_id = update.effective_user.id
 
         # Проверка авторизации
-        if not self._is_authorized(user_id):
-            await query.answer("❌ У вас нет доступа к этому боту.")
+        if not await self.check_authorization(update, context):
             return
+
+        user_id = update.effective_user.id
 
         # Проверяем наличие voting_manager
         if not self.voting_manager:
@@ -334,12 +337,12 @@ class VoteHandler:
             context: Контекст бота
         """
         query = update.callback_query
-        user_id = update.effective_user.id
 
         # Проверка авторизации
-        if not self._is_authorized(user_id):
-            await query.answer("❌ У вас нет доступа к этому боту.", show_alert=True)
+        if not await self.check_authorization(update, context):
             return
+
+        user_id = update.effective_user.id
 
         # Проверяем наличие voting_manager
         if not self.voting_manager:
