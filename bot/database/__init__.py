@@ -81,7 +81,6 @@ class Database(DatabaseBase):
         self.exclude_gallery = self.preferences_repo.exclude_gallery
 
         # Weights methods
-        self.calculate_initial_weight = self.weights_repo.calculate_initial_weight
         self.get_gallery_weight = self.weights_repo.get_gallery_weight
         self.update_gallery_weight = self.weights_repo.update_gallery_weight
         self.get_all_gallery_weights = self.weights_repo.get_all_gallery_weights

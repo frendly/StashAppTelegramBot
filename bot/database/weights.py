@@ -20,26 +20,6 @@ class WeightsRepository:
         """
         self.db_path = db_path
 
-    @staticmethod
-    def calculate_initial_weight(positive_votes: int, negative_votes: int) -> float:
-        """
-        Расчет начального веса из истории голосований.
-
-        Args:
-            positive_votes: Количество положительных голосов
-            negative_votes: Количество отрицательных голосов
-
-        Returns:
-            float: Начальный вес с учетом ограничений 0.1 ≤ вес ≤ 10.0
-        """
-        # Формула: W = 1.0 * 1.2^(плюсы) * 0.8^(минусы)
-        weight = 1.0 * (1.2**positive_votes) * (0.8**negative_votes)
-
-        # Применяем ограничения
-        weight = max(0.1, min(10.0, weight))
-
-        return weight
-
     def get_gallery_weight(self, gallery_id: str) -> float:
         """
         Получение текущего веса галереи.
