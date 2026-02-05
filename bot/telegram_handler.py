@@ -2,7 +2,6 @@
 
 import logging
 import time
-from typing import TYPE_CHECKING, Optional
 
 from telegram import Update
 from telegram.ext import (
@@ -22,9 +21,7 @@ from bot.handlers.image_selector import ImageSelector
 from bot.handlers.photo_sender import PhotoSender
 from bot.handlers.vote_handler import VoteHandler
 from bot.stash_client import StashClient, StashImage
-
-if TYPE_CHECKING:
-    from bot.voting import VotingManager
+from bot.voting import VotingManager
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +34,7 @@ class TelegramHandler:
         config: BotConfig,
         stash_client: StashClient,
         database: Database,
-        voting_manager: Optional["VotingManager"] = None,
+        voting_manager: VotingManager | None = None,
     ):
         """
         Инициализация обработчика.

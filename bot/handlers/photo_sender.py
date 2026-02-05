@@ -2,11 +2,10 @@
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
-from telegram.ext import ContextTypes
+from telegram.ext import Application, ContextTypes
 
 from bot.config import BotConfig
 from bot.database import Database
@@ -14,9 +13,7 @@ from bot.handlers.caption_formatter import CaptionFormatter
 from bot.handlers.image_selector import ImageSelector
 from bot.performance import PerformanceTimer
 from bot.stash_client import StashClient, StashImage
-
-if TYPE_CHECKING:
-    from bot.voting import VotingManager
+from bot.voting import VotingManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +28,8 @@ class PhotoSender:
         database: Database,
         image_selector: ImageSelector,
         caption_formatter: CaptionFormatter,
-        voting_manager: Optional["VotingManager"] = None,
-        application=None,
+        voting_manager: VotingManager | None = None,
+        application: Application | None = None,
         last_sent_images: dict[int, StashImage] | None = None,
         last_sent_image_id: dict[int, str] | None = None,
     ):
@@ -61,7 +58,7 @@ class PhotoSender:
         self._last_sent_image_id = last_sent_image_id or {}
 
         # Кэш для предзагрузки
-        self._prefetched_image: dict[str, Any] | None = None
+        self._prefetched_image: StashImage | None = None
         self._prefetch_lock: asyncio.Lock = asyncio.Lock()
 
     def _should_show_threshold_notification(self, gallery_id: str) -> bool:
