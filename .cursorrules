@@ -167,6 +167,17 @@ For project understanding see:
 - `CURSOR_FULL.md` - full technical documentation
 - `README.md` - setup instructions
 
+## Git Commits
+
+- **Commit messages must be in English**
+- **Keep commit messages short and concise** (50-72 characters for subject line)
+- Use conventional commit format when possible: `type(scope): description`
+- Examples:
+  - `fix: resolve pytest import error in test_image_selector`
+  - `feat: add uv support to Makefile`
+  - `refactor: simplify venv detection logic`
+  - `docs: update README with uv installation instructions`
+
 ## Important Notes
 
 - Project uses **Semantic Versioning** (MAJOR.MINOR.PATCH)

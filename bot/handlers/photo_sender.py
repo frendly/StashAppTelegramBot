@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import TelegramError
 from telegram.ext import Application, ContextTypes
 
@@ -97,6 +97,234 @@ class PhotoSender:
             )
             return False
 
+    async def _get_image_from_cache(
+        self, chat_id: int, context: ContextTypes.DEFAULT_TYPE | None
+    ) -> StashImage | None:
+        """
+        Получение случайного изображения из кеша.
+
+        Args:
+            chat_id: ID чата для отправки сообщений об ошибках
+            context: Контекст бота (опционально)
+
+        Returns:
+            StashImage или None при ошибке
+        """
+        recent_ids = self.database.get_recent_image_ids(
+            self.config.history.avoid_recent_days
+        )
+
+        image = await self.image_selector.get_random_image_from_cache(recent_ids)
+
+        if not image:
+            logger.warning("⚠️ Кеш пуст или не найдено подходящих изображений")
+            if context:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⏳ Кеш пуст. Подождите, пока изображения будут предзагружены в служебный канал.",
+                )
+            return None
+
+        file_id = image.telegram_file_id
+        if not file_id:
+            logger.warning(
+                f"⚠️ telegram_file_id не найден для изображения {image.id} в объекте (должен быть в details)"
+            )
+            if context:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⏳ Изображение не в кеше. Подождите, пока оно будет предзагружено.",
+                )
+            return None
+
+        return image
+
+    def _format_caption_with_threshold(
+        self, image: StashImage, is_preloaded_from_cache: bool
+    ) -> str:
+        """
+        Форматирование подписи с учетом порога исключения.
+
+        Args:
+            image: Объект изображения
+            is_preloaded_from_cache: True если изображение предзагружено из кеша
+
+        Returns:
+            Отформатированная подпись
+        """
+        should_show_threshold = False
+        if image.gallery_id:
+            should_show_threshold = self._should_show_threshold_notification(
+                image.gallery_id
+            )
+
+        if not should_show_threshold:
+            return self.caption_formatter.format_caption(image, is_preloaded_from_cache)
+
+        # Используем формат с порогом
+        gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
+        if gallery_stats:
+            caption = self.caption_formatter.format_threshold_caption(
+                image, gallery_stats, is_preloaded_from_cache
+            )
+            # Отмечаем уведомление как показанное
+            self.database.mark_threshold_notification_shown(image.gallery_id)
+            return caption
+
+        # Fallback на обычный формат, если статистики нет
+        return self.caption_formatter.format_caption(image, is_preloaded_from_cache)
+
+    def _create_voting_keyboard(
+        self, image: StashImage, should_show_threshold: bool
+    ) -> InlineKeyboardMarkup:
+        """
+        Создание клавиатуры для голосования.
+
+        Args:
+            image: Объект изображения
+            should_show_threshold: True если нужно показать кнопку исключения
+
+        Returns:
+            InlineKeyboardMarkup с кнопками голосования
+        """
+        keyboard = [
+            [
+                InlineKeyboardButton("👍", callback_data=f"vote_up_{image.id}"),
+                InlineKeyboardButton("👎", callback_data=f"vote_down_{image.id}"),
+            ]
+        ]
+
+        # Добавление кнопки исключения, если порог достигнут
+        if should_show_threshold and image.gallery_id:
+            gallery_title = image.get_gallery_title()
+            if gallery_title:
+                prefix = '🚫 Исключить "'
+                suffix = '"'
+                # Ограничиваем длину текста кнопки (Telegram имеет лимит 64 символа)
+                max_title_length = 64 - len(prefix) - len(suffix) - 3  # -3 для "..."
+                if len(gallery_title) > max_title_length:
+                    gallery_title = gallery_title[:max_title_length] + "..."
+                exclude_button_text = f"{prefix}{gallery_title}{suffix}"
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            exclude_button_text,
+                            callback_data=f"exclude_gallery_{image.gallery_id}",
+                        )
+                    ]
+                )
+
+        return InlineKeyboardMarkup(keyboard)
+
+    async def _send_photo_to_telegram(
+        self,
+        chat_id: int,
+        file_id: str,
+        caption: str,
+        reply_markup: InlineKeyboardMarkup,
+        context: ContextTypes.DEFAULT_TYPE | None,
+    ) -> tuple[bool, Message | None]:
+        """
+        Отправка фото в Telegram.
+
+        Args:
+            chat_id: ID чата
+            file_id: Telegram file_id изображения
+            caption: Подпись к изображению
+            reply_markup: Клавиатура с кнопками
+            context: Контекст бота (опционально)
+
+        Returns:
+            Tuple[success, sent_message] - успех отправки и объект сообщения
+        """
+        try:
+            if context:
+                sent_message = await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup,
+                )
+                return (True, sent_message)
+
+            # Для планировщика используем application
+            if self.application:
+                sent_message = await self.application.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup,
+                )
+                return (True, sent_message)
+
+            return (False, None)
+
+        except asyncio.CancelledError:
+            raise
+        except TelegramError as e:
+            logger.error(
+                f"file_id недействителен: {e}. Изображение нужно перезагрузить в кеш."
+            )
+            if context:
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ Не удалось отправить изображение. Попробуйте позже.",
+                    )
+                except asyncio.CancelledError:
+                    raise
+            return (False, None)
+
+    async def _update_file_id_if_changed(
+        self, image: StashImage, sent_message: Message | None, file_id: str
+    ) -> None:
+        """
+        Обновление file_id в StashApp, если он изменился.
+
+        Args:
+            image: Объект изображения
+            sent_message: Объект отправленного сообщения
+            file_id: Текущий file_id
+        """
+        if not sent_message or not sent_message.photo:
+            return
+
+        new_file_id = sent_message.photo[-1].file_id
+        if new_file_id != file_id:
+            await self.stash_client.save_telegram_file_id(image.id, new_file_id)
+            logger.debug(f"Обновлен file_id для изображения {image.id} в StashApp")
+
+    def _save_sent_photo_to_database(
+        self, image: StashImage, user_id: int | None
+    ) -> None:
+        """
+        Сохранение информации об отправленном фото в базу данных.
+
+        Args:
+            image: Объект изображения
+            user_id: ID пользователя (опционально)
+        """
+        self.database.add_sent_photo(
+            image_id=image.id,
+            user_id=user_id,
+            title=image.title,
+            file_id_high_quality=None,  # Больше не сохраняем в БД
+        )
+
+    def _cache_sent_image(self, user_id: int | None, image: StashImage) -> None:
+        """
+        Сохранение изображения в кэш для обработки голосования.
+
+        Args:
+            user_id: ID пользователя
+            image: Объект изображения
+        """
+        if user_id:
+            self._last_sent_images[user_id] = image
+            self._last_sent_image_id[user_id] = image.id
+
     async def send_random_photo(
         self,
         chat_id: int,
@@ -120,165 +348,54 @@ class PhotoSender:
         timer.start()
 
         try:
-            # Получаем список недавно отправленных ID для исключения
-            recent_ids = self.database.get_recent_image_ids(
-                self.config.history.avoid_recent_days
-            )
-
-            # Получаем случайное изображение из кеша (только с telegram_file_id)
-            image = await self.image_selector.get_random_image_from_cache(recent_ids)
-
+            # Получаем изображение из кеша
+            image = await self._get_image_from_cache(chat_id, context)
             if not image:
-                logger.warning("⚠️ Кеш пуст или не найдено подходящих изображений")
-                if context:
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text="⏳ Кеш пуст. Подождите, пока изображения будут предзагружены в служебный канал.",
-                    )
+                timer.end()
                 return False
 
-            # Получаем file_id из объекта изображения (уже загружен из кеша)
             file_id = image.telegram_file_id
-
-            if not file_id:
-                logger.warning(
-                    f"⚠️ telegram_file_id не найден для изображения {image.id} в объекте (должен быть в details)"
-                )
-                if context:
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text="⏳ Изображение не в кеше. Подождите, пока оно будет предзагружено.",
-                    )
-                return False
-
             timer.checkpoint("Get from cache")
 
-            # Определяем, было ли изображение предзагружено из служебного канала
             is_preloaded_from_cache = file_id is not None
             logger.info(
                 f"Image {image.id}: file_id={'YES' if file_id else 'NO'}, is_preloaded_from_cache={is_preloaded_from_cache}"
             )
 
-            # Проверка достижения порога и формирование подписи
+            # Формируем подпись
+            caption = self._format_caption_with_threshold(
+                image, is_preloaded_from_cache
+            )
+
+            # Проверяем, нужно ли показать кнопку исключения
             should_show_threshold = False
             if image.gallery_id:
                 should_show_threshold = self._should_show_threshold_notification(
                     image.gallery_id
                 )
 
-            if should_show_threshold:
-                # Используем формат с порогом
-                gallery_stats = self.database.get_gallery_statistics(image.gallery_id)
-                if gallery_stats:
-                    caption = self.caption_formatter.format_threshold_caption(
-                        image, gallery_stats, is_preloaded_from_cache
-                    )
-                    # Отмечаем уведомление как показанное
-                    self.database.mark_threshold_notification_shown(image.gallery_id)
-                else:
-                    # Fallback на обычный формат, если статистики нет
-                    caption = self.caption_formatter.format_caption(
-                        image, is_preloaded_from_cache
-                    )
-            else:
-                # Обычный формат
-                caption = self.caption_formatter.format_caption(
-                    image, is_preloaded_from_cache
-                )
+            # Создаем клавиатуру
+            reply_markup = self._create_voting_keyboard(image, should_show_threshold)
 
-            # Создание кнопок для голосования
-            keyboard = [
-                [
-                    InlineKeyboardButton("👍", callback_data=f"vote_up_{image.id}"),
-                    InlineKeyboardButton("👎", callback_data=f"vote_down_{image.id}"),
-                ]
-            ]
-
-            # Добавление кнопки исключения, если порог достигнут
-            gallery_title = image.get_gallery_title()
-            if should_show_threshold and image.gallery_id and gallery_title:
-                exclude_button_text = f'🚫 Исключить "{gallery_title}"'
-                # Ограничиваем длину текста кнопки (Telegram имеет лимит)
-                if len(exclude_button_text) > 64:
-                    exclude_button_text = f'🚫 Исключить "{gallery_title[:50]}..."'
-                keyboard.append(
-                    [
-                        InlineKeyboardButton(
-                            exclude_button_text,
-                            callback_data=f"exclude_gallery_{image.gallery_id}",
-                        )
-                    ]
-                )
-
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            # Отправка фото используя file_id
-            sent_message = None
-
-            try:
-                if context:
-                    sent_message = await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=file_id,
-                        caption=caption,
-                        parse_mode="HTML",
-                        reply_markup=reply_markup,
-                    )
-                else:
-                    # Для планировщика используем application
-                    if self.application:
-                        sent_message = await self.application.bot.send_photo(
-                            chat_id=chat_id,
-                            photo=file_id,
-                            caption=caption,
-                            parse_mode="HTML",
-                            reply_markup=reply_markup,
-                        )
-
-            except asyncio.CancelledError:
-                # Пробрасываем CancelledError дальше
-                raise
-            except TelegramError as e:
-                # Если file_id недействителен, логируем ошибку
-                logger.error(
-                    f"file_id недействителен для {image.id}: {e}. "
-                    "Изображение нужно перезагрузить в кеш."
-                )
-                if context:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="❌ Не удалось отправить изображение. Попробуйте позже.",
-                        )
-                    except asyncio.CancelledError:
-                        raise
+            # Отправляем фото
+            success, sent_message = await self._send_photo_to_telegram(
+                chat_id, file_id, caption, reply_markup, context
+            )
+            if not success:
+                timer.end()
                 return False
 
             timer.checkpoint("Send to Telegram")
 
-            # Получаем file_id из ответа для обновления в StashApp (если изменился)
-            if sent_message and sent_message.photo:
-                new_file_id = sent_message.photo[-1].file_id
-                # Обновляем в StashApp если file_id изменился
-                if new_file_id != file_id:
-                    await self.stash_client.save_telegram_file_id(image.id, new_file_id)
-                    logger.debug(
-                        f"Обновлен file_id для изображения {image.id} в StashApp"
-                    )
+            # Обновляем file_id, если изменился
+            await self._update_file_id_if_changed(image, sent_message, file_id)
 
-            # Сохранение в базу данных (только для статистики, без file_id)
-            self.database.add_sent_photo(
-                image_id=image.id,
-                user_id=user_id,
-                title=image.title,
-                file_id_high_quality=None,  # Больше не сохраняем в БД
-            )
+            # Сохраняем в базу данных
+            self._save_sent_photo_to_database(image, user_id)
             timer.checkpoint("Save to database")
 
-            # Сохранение изображения в кэш для обработки голосования
-            if user_id:
-                self._last_sent_images[user_id] = image
-                self._last_sent_image_id[user_id] = image.id
+            # Сохраняем в кэш для голосования
+            self._cache_sent_image(user_id, image)
 
             # Проверка размера кеша и пополнение при необходимости
             if self.config.cache:
@@ -289,7 +406,6 @@ class PhotoSender:
             return True
 
         except asyncio.CancelledError:
-            # Пробрасываем CancelledError дальше - это нормальная часть механизма отмены задач
             timer.end()
             logger.debug("Отправка фото отменена")
             raise

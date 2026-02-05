@@ -1,6 +1,6 @@
 .PHONY: help build up down logs restart clean shell backup stats
 .PHONY: ghcr-login ghcr-build ghcr-push ghcr-pull ghcr-up
-.PHONY: install-dev lint format check
+.PHONY: install-dev lint format check complexity test test-file check-venv
 
 # Конфигурация для GitHub Container Registry
 REGISTRY = ghcr.io
@@ -24,11 +24,21 @@ help:
 	@echo "  make stats       - Показать статистику из БД"
 	@echo ""
 	@echo "Разработка и качество кода:"
-	@echo "  make install-dev - Установить dev-зависимости (ruff)"
+	@echo "  make install-dev - Установить dev-зависимости (ruff, radon)"
 	@echo "  make lint        - Проверить код линтером"
 	@echo "  make format      - Автоформатирование кода"
 	@echo "  make check       - Проверить форматирование (без изменений)"
+	@echo "  make complexity  - Анализ сложности кода (radon)"
 	@echo "  make test        - Запустить unit-тесты (pytest)"
+	@echo "  make test-file FILE=<path> - Запустить тесты из конкретного файла"
+	@if [ "$(HAS_UV)" = "yes" ]; then \
+		echo ""; \
+		echo "ℹ️  Используется uv для управления окружением"; \
+	else \
+		echo ""; \
+		echo "💡 Используется .venv (fallback)"; \
+		echo "   Рекомендуется установить uv: curl -LsSf https://astral.sh/uv/install.sh | sh"; \
+	fi
 	@echo ""
 	@echo "GitHub Container Registry:"
 	@echo "  make ghcr-login      - Авторизация в GHCR"
@@ -112,27 +122,99 @@ ghcr-up:
 	@echo "✅ Бот запущен из образа GHCR"
 
 # Команды для разработки и качества кода
-install-dev:
+# Приоритет: uv > .venv (fallback)
+# uv автоматически управляет виртуальным окружением и не требует активации
+HAS_UV := $(shell command -v uv >/dev/null 2>&1 && echo "yes" || echo "no")
+VENV_PYTHON := $(shell if [ "$(HAS_UV)" = "yes" ]; then echo "uv run python"; else if [ -d .venv ] && .venv/bin/python -c "import sys" >/dev/null 2>&1; then echo ".venv/bin/python"; else echo ""; fi; fi)
+VENV_PIP := $(shell if [ "$(HAS_UV)" = "yes" ]; then echo "uv pip install"; else if [ -d .venv ] && .venv/bin/pip --version >/dev/null 2>&1; then echo ".venv/bin/pip install"; else echo ""; fi; fi)
+
+# Проверка доступности окружения
+check-venv:
+	@if [ "$(HAS_UV)" != "yes" ] && [ -z "$(VENV_PYTHON)" ]; then \
+		echo "❌ Ошибка: uv не установлен и .venv не найден"; \
+		echo ""; \
+		echo "Установите uv (рекомендуется):"; \
+		echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"; \
+		echo ""; \
+		echo "Или создайте окружение вручную:"; \
+		echo "  python3 -m venv .venv"; \
+		echo "  .venv/bin/pip install -r requirements.txt"; \
+		echo "  .venv/bin/pip install -r requirements-dev.txt"; \
+		exit 1; \
+	fi
+
+install-dev: check-venv
 	@echo "Установка dev-зависимостей..."
-	pip install -r requirements-dev.txt
+	@if [ "$(HAS_UV)" = "yes" ]; then \
+		echo "Используется: uv"; \
+		uv pip install -r requirements.txt; \
+		uv pip install -r requirements-dev.txt; \
+	else \
+		echo "Используется: .venv/bin/pip"; \
+		.venv/bin/pip install -r requirements.txt; \
+		.venv/bin/pip install -r requirements-dev.txt; \
+	fi
 	@echo "✅ Dev-зависимости установлены"
 
-lint:
+lint: check-venv
 	@echo "Проверка кода линтером..."
-	ruff check bot/
+	@if [ "$(HAS_UV)" = "yes" ]; then \
+		uv run python -m ruff check bot/; \
+	else \
+		.venv/bin/python -m ruff check bot/; \
+	fi
 	@echo "✅ Проверка завершена"
 
-format:
+format: check-venv
 	@echo "Форматирование кода..."
-	ruff format bot/
+	@if [ "$(HAS_UV)" = "yes" ]; then \
+		uv run python -m ruff format bot/; \
+	else \
+		.venv/bin/python -m ruff format bot/; \
+	fi
 	@echo "✅ Код отформатирован"
 
-check:
+check: check-venv
 	@echo "Проверка форматирования (без изменений)..."
-	ruff check bot/
-	ruff format --check bot/
+	@if [ "$(HAS_UV)" = "yes" ]; then \
+		uv run python -m ruff check bot/; \
+		uv run python -m ruff format --check bot/; \
+	else \
+		.venv/bin/python -m ruff check bot/; \
+		.venv/bin/python -m ruff format --check bot/; \
+	fi
 	@echo "✅ Проверка завершена"
 
-test:
+complexity: check-venv
+	@echo "Анализ сложности кода..."
+	@if [ "$(HAS_UV)" = "yes" ]; then \
+		uv run python -m radon cc bot/ --min B -a; \
+	else \
+		.venv/bin/python -m radon cc bot/ --min B -a; \
+	fi
+	@echo "✅ Анализ завершен"
+
+test: check-venv
 	@echo "Запуск unit-тестов..."
-	pytest
+	@if [ "$(HAS_UV)" = "yes" ]; then \
+		echo "Используется: uv run python -m pytest"; \
+		uv run python -m pytest; \
+	else \
+		echo "Используется: .venv/bin/python -m pytest"; \
+		.venv/bin/python -m pytest; \
+	fi
+
+test-file: check-venv
+	@if [ -z "$(FILE)" ]; then \
+		echo "❌ Ошибка: укажите файл через FILE=<path>"; \
+		echo "Пример: make test-file FILE=tests/handlers/test_vote_handler.py"; \
+		exit 1; \
+	fi
+	@echo "Запуск тестов из файла: $(FILE)"
+	@if [ "$(HAS_UV)" = "yes" ]; then \
+		echo "Используется: uv run python -m pytest"; \
+		uv run python -m pytest $(FILE) -v --tb=short; \
+	else \
+		echo "Используется: .venv/bin/python -m pytest"; \
+		.venv/bin/python -m pytest $(FILE) -v --tb=short; \
+	fi

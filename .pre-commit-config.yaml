@@ -16,7 +16,7 @@ repos:
     hooks:
       - id: pytest
         name: "Запуск быстрых тестов (pytest)"
-        entry: bash -c 'if [ -f venv/bin/pytest ]; then venv/bin/pytest -x; elif command -v pytest >/dev/null 2>&1; then pytest -x; else echo "pytest not found, skipping tests"; exit 0; fi'
+        entry: bash -c 'if command -v uv >/dev/null 2>&1; then uv run pytest -x; elif [ -f .venv/bin/pytest ]; then .venv/bin/pytest -x; elif [ -f venv/bin/pytest ]; then venv/bin/pytest -x; elif command -v pytest >/dev/null 2>&1; then pytest -x; else echo "pytest not found, skipping tests"; exit 0; fi'
         language: system
         pass_filenames: false
         always_run: false

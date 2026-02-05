@@ -6,8 +6,13 @@
 
 # Code quality tools
 ruff>=0.1.0
+radon>=6.0.0
+mccabe>=0.7.0
 
 # Инструменты для тестирования
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 pytest-mock>=3.12.0
+
+# Pre-commit hooks
+pre-commit>=3.5.0

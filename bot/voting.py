@@ -44,6 +44,197 @@ class VotingManager:
         self._weights_cache: dict[str, float] | None = None
         self._weights_cache_time: float = 0
 
+    async def _update_image_rating(self, image: StashImage, vote: int) -> bool:
+        """
+        Обновление рейтинга изображения в StashApp.
+
+        Args:
+            image: Объект изображения
+            vote: 1 для лайка, -1 для дизлайка
+
+        Returns:
+            True если обновление успешно
+        """
+        rating = 5 if vote > 0 else 1
+        image_updated = await self.stash_client.update_image_rating(image.id, rating)
+
+        if not image_updated:
+            logger.warning(f"Не удалось обновить рейтинг изображения {image.id}")
+
+        return image_updated
+
+    def _save_vote_to_database(self, image: StashImage, vote: int) -> None:
+        """
+        Сохранение голоса в базу данных.
+
+        Args:
+            image: Объект изображения
+            vote: 1 для лайка, -1 для дизлайка
+        """
+        performer_ids = [p["id"] for p in image.performers]
+        performer_names = [p["name"] for p in image.performers]
+        gallery_title = image.get_gallery_title()
+
+        self.database.add_vote(
+            image_id=image.id,
+            vote=vote,
+            gallery_id=image.gallery_id,
+            gallery_title=gallery_title,
+            performer_ids=performer_ids,
+            performer_names=performer_names,
+        )
+
+    def _update_performers_preferences(self, image: StashImage, vote: int) -> list[str]:
+        """
+        Обновление предпочтений по перформерам.
+
+        Args:
+            image: Объект изображения
+            vote: 1 для лайка, -1 для дизлайка
+
+        Returns:
+            Список имен обновленных перформеров
+        """
+        updated_performers = []
+        for performer in image.performers:
+            self.database.update_performer_preference(
+                performer_id=performer["id"],
+                performer_name=performer["name"],
+                vote=vote,
+            )
+            updated_performers.append(performer["name"])
+            logger.debug(f"Обновлены предпочтения перформера: {performer['name']}")
+
+        return updated_performers
+
+    async def _update_gallery_weight(self, gallery_id: str, vote: int) -> None:
+        """
+        Обновление веса галереи с учетом коэффициента k=0.2.
+
+        Args:
+            gallery_id: ID галереи
+            vote: 1 для лайка, -1 для дизлайка
+        """
+        try:
+            new_weight = self.database.update_gallery_weight(gallery_id, vote)
+            gallery_pref = self.database.get_gallery_preference(gallery_id)
+            title = gallery_pref.get("gallery_title") if gallery_pref else "неизвестная"
+            logger.debug(f"Вес галереи '{title}' обновлен: {new_weight:.3f}")
+            # Инвалидируем кэш весов после обновления
+            self.invalidate_weights_cache()
+        except Exception as e:
+            logger.warning(f"Ошибка при обновлении веса галереи {gallery_id}: {e}")
+
+    async def _update_gallery_image_count(self, gallery_id: str) -> None:
+        """
+        Обновление статистики галереи (количество изображений).
+
+        Args:
+            gallery_id: ID галереи
+        """
+        try:
+            if not self.database.should_update_image_count(
+                gallery_id, days_threshold=7
+            ):
+                return
+
+            logger.debug(f"Обновление количества изображений для галереи {gallery_id}")
+            image_count = await self.stash_client.get_gallery_image_count(gallery_id)
+
+            if image_count is None:
+                logger.warning(
+                    f"Не удалось получить количество изображений для галереи {gallery_id}"
+                )
+                return
+
+            self.database.update_gallery_image_count(gallery_id, image_count)
+            gallery_title = self.database.get_gallery_preference(gallery_id)
+            title = (
+                gallery_title.get("gallery_title") if gallery_title else "неизвестная"
+            )
+            logger.debug(
+                f"Количество изображений для галереи '{title}' обновлено: {image_count}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Ошибка при обновлении статистики галереи {gallery_id}: {e}"
+            )
+
+    async def _update_gallery_rating_if_needed(
+        self, gallery_id: str, should_update: bool
+    ) -> bool:
+        """
+        Установка рейтинга галереи, если достигнут порог в 5 голосов.
+
+        Args:
+            gallery_id: ID галереи
+            should_update: True если нужно обновить рейтинг
+
+        Returns:
+            True если рейтинг был установлен
+        """
+        if not should_update:
+            return False
+
+        gallery_pref = self.database.get_gallery_preference(gallery_id)
+        if not gallery_pref:
+            return False
+
+        # Рассчитываем средний рейтинг на основе голосов
+        avg_rating = self._calculate_gallery_rating(
+            gallery_pref["positive_votes"],
+            gallery_pref["negative_votes"],
+        )
+
+        gallery_rating_updated = await self.stash_client.update_gallery_rating(
+            gallery_id, avg_rating
+        )
+
+        if gallery_rating_updated:
+            self.database.mark_gallery_rating_set(gallery_id)
+            gallery_title = gallery_pref.get("gallery_title", "неизвестная")
+            logger.info(
+                f"Рейтинг галереи '{gallery_title}' установлен на {avg_rating}/5"
+            )
+            return True
+
+        return False
+
+    async def _update_gallery_data(
+        self, image: StashImage, vote: int, result: dict[str, Any]
+    ) -> None:
+        """
+        Обновление данных галереи (предпочтения, вес, статистика, рейтинг).
+
+        Args:
+            image: Объект изображения
+            vote: 1 для лайка, -1 для дизлайка
+            result: Словарь результата для обновления
+        """
+        gallery_title = image.get_gallery_title()
+        if not image.gallery_id or not gallery_title:
+            return
+
+        should_update_gallery = self.database.update_gallery_preference(
+            gallery_id=image.gallery_id,
+            gallery_title=gallery_title,
+            vote=vote,
+        )
+
+        result["gallery_updated"] = gallery_title
+
+        # Обновляем вес галереи
+        await self._update_gallery_weight(image.gallery_id, vote)
+
+        # Обновляем статистику галереи (количество изображений)
+        await self._update_gallery_image_count(image.gallery_id)
+
+        # Устанавливаем рейтинг галереи, если достигнут порог
+        gallery_rating_updated = await self._update_gallery_rating_if_needed(
+            image.gallery_id, should_update_gallery
+        )
+        result["gallery_rating_updated"] = gallery_rating_updated
+
     async def process_vote(self, image: StashImage, vote: int) -> dict[str, Any]:
         """
         Обработка голоса за изображение.
@@ -65,120 +256,20 @@ class VotingManager:
 
         try:
             # 1. Обновляем рейтинг изображения в Stash
-            rating = 5 if vote > 0 else 1
-            image_updated = await self.stash_client.update_image_rating(
-                image.id, rating
+            result["image_rating_updated"] = await self._update_image_rating(
+                image, vote
             )
-            result["image_rating_updated"] = image_updated
-
-            if not image_updated:
-                logger.warning(f"Не удалось обновить рейтинг изображения {image.id}")
 
             # 2. Сохраняем голос в базу данных
-            performer_ids = [p["id"] for p in image.performers]
-            performer_names = [p["name"] for p in image.performers]
-
-            gallery_title = image.get_gallery_title()
-
-            self.database.add_vote(
-                image_id=image.id,
-                vote=vote,
-                gallery_id=image.gallery_id,
-                gallery_title=gallery_title,
-                performer_ids=performer_ids,
-                performer_names=performer_names,
-            )
+            self._save_vote_to_database(image, vote)
 
             # 3. Обновляем предпочтения по перформерам
-            for performer in image.performers:
-                self.database.update_performer_preference(
-                    performer_id=performer["id"],
-                    performer_name=performer["name"],
-                    vote=vote,
-                )
-                result["performers_updated"].append(performer["name"])
-                logger.debug(f"Обновлены предпочтения перформера: {performer['name']}")
+            result["performers_updated"] = self._update_performers_preferences(
+                image, vote
+            )
 
-            # 4. Обновляем предпочтения по галерее (если есть)
-            gallery_title = image.get_gallery_title()
-            if image.gallery_id and gallery_title:
-                should_update_gallery = self.database.update_gallery_preference(
-                    gallery_id=image.gallery_id,
-                    gallery_title=gallery_title,
-                    vote=vote,
-                )
-
-                result["gallery_updated"] = gallery_title
-
-                # 4.1. Обновляем вес галереи с учетом коэффициента k=0.2
-                try:
-                    new_weight = self.database.update_gallery_weight(
-                        image.gallery_id, vote
-                    )
-                    logger.debug(
-                        f"Вес галереи '{gallery_title}' обновлен: {new_weight:.3f}"
-                    )
-                    # Инвалидируем кэш весов после обновления
-                    self.invalidate_weights_cache()
-                except Exception as e:
-                    logger.warning(
-                        f"Ошибка при обновлении веса галереи {image.gallery_id}: {e}"
-                    )
-
-                # 4.2. Обновляем статистику галереи (количество изображений)
-                try:
-                    if self.database.should_update_image_count(
-                        image.gallery_id, days_threshold=7
-                    ):
-                        logger.debug(
-                            f"Обновление количества изображений для галереи {image.gallery_id}"
-                        )
-                        image_count = await self.stash_client.get_gallery_image_count(
-                            image.gallery_id
-                        )
-
-                        if image_count is not None:
-                            self.database.update_gallery_image_count(
-                                image.gallery_id, image_count
-                            )
-                            gallery_title = image.get_gallery_title() or "неизвестная"
-                            logger.debug(
-                                f"Количество изображений для галереи '{gallery_title}' обновлено: {image_count}"
-                            )
-                        else:
-                            logger.warning(
-                                f"Не удалось получить количество изображений для галереи {image.gallery_id}"
-                            )
-                except Exception as e:
-                    logger.warning(
-                        f"Ошибка при обновлении статистики галереи {image.gallery_id}: {e}"
-                    )
-
-                # 5. Если достигнут порог в 5 голосов, устанавливаем рейтинг галереи
-                if should_update_gallery:
-                    gallery_pref = self.database.get_gallery_preference(
-                        image.gallery_id
-                    )
-                    if gallery_pref:
-                        # Рассчитываем средний рейтинг на основе голосов
-                        avg_rating = self._calculate_gallery_rating(
-                            gallery_pref["positive_votes"],
-                            gallery_pref["negative_votes"],
-                        )
-
-                        gallery_rating_updated = (
-                            await self.stash_client.update_gallery_rating(
-                                image.gallery_id, avg_rating
-                            )
-                        )
-
-                        if gallery_rating_updated:
-                            self.database.mark_gallery_rating_set(image.gallery_id)
-                            result["gallery_rating_updated"] = True
-                            gallery_title = image.get_gallery_title() or "неизвестная"
-                            logger.info(
-                                f"Рейтинг галереи '{gallery_title}' установлен на {avg_rating}/5"
-                            )
+            # 4. Обновляем данные галереи (если есть)
+            await self._update_gallery_data(image, vote, result)
 
             logger.info(f"Голос обработан: image={image.id}, vote={vote}")
             return result
