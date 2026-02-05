@@ -21,8 +21,7 @@ services:
       test:
         - CMD
         - python
-        - '-c'
-        - import os; exit(0 if os.path.exists('/data/sent_photos.db') else 1)
+        - /app/healthcheck.py
       timeout: 10s
     image: ghcr.io/frendly/stashapptelegrambot:latest
     logging:

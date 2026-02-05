@@ -42,6 +42,14 @@ services:
           cpus: '0.5'
           memory: 256M
 
+    # Healthcheck через /health endpoint
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
     # Логирование
     logging:
       driver: "json-file"

@@ -26,6 +26,11 @@ RUN mkdir -p /data /config && \
 # Копирование кода приложения
 COPY bot/ ./bot/
 
+# Копирование скрипта healthcheck (до переключения пользователя для установки прав)
+COPY healthcheck.py /app/healthcheck.py
+RUN chmod +x /app/healthcheck.py && \
+    chown botuser:botuser /app/healthcheck.py
+
 # Переключение на непривилегированного пользователя
 USER botuser
 
@@ -33,9 +38,10 @@ USER botuser
 ENV PYTHONUNBUFFERED=1
 ENV CONFIG_PATH=/config/config.yml
 
-# Healthcheck (опционально)
+# Healthcheck через /health endpoint
+# Проверяет порт 8080 (polling) или 8443 (webhook)
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import os; exit(0 if os.path.exists('/data/sent_photos.db') else 1)"
+    CMD python /app/healthcheck.py
 
 # Запуск бота
 CMD ["python", "-m", "bot.main"]

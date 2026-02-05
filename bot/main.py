@@ -16,6 +16,7 @@ from telegram.ext import Application
 from bot.config import BotConfig, load_config
 from bot.constants import BATCH_SIZE_MULTIPLIER
 from bot.database import Database
+from bot.health import check_all_health
 from bot.scheduler import Scheduler
 from bot.stash_client import StashClient
 from bot.telegram_handler import TelegramHandler
@@ -59,6 +60,7 @@ class Bot:
         self.config_path = config_path
         self._shutdown_event = asyncio.Event()
         self._web_app_runner: web.AppRunner | None = None
+        self._health_app_runner: web.AppRunner | None = None
 
     async def initialize(self):
         """Инициализация компонентов бота."""
@@ -205,6 +207,7 @@ class Bot:
                         await self._stop_webhook_mode()
                     else:
                         # Режим polling
+                        await self._stop_health_server()
                         await self.application.updater.stop()
 
                     await self.application.stop()
@@ -316,6 +319,9 @@ class Bot:
             drop_pending_updates=True,
         )
 
+        # Запуск HTTP сервера для health checks
+        await self._start_health_server()
+
         logger.info("=" * 50)
         logger.info("✅ Бот запущен в режиме polling и готов к работе!")
         logger.info("=" * 50)
@@ -387,6 +393,9 @@ class Bot:
 
         aiohttp_app.router.add_post(webhook_path, handle_update)
 
+        # Добавляем health check endpoint
+        aiohttp_app.router.add_get("/health", self._handle_health_check)
+
         self._web_app_runner = web.AppRunner(aiohttp_app)
         try:
             await self._web_app_runner.setup()
@@ -445,6 +454,73 @@ class Bot:
 
         # Ожидание сигнала завершения
         await self._shutdown_event.wait()
+
+    async def _handle_health_check(self, request: web.Request) -> web.Response:
+        """
+        Обработчик health check endpoint.
+
+        Args:
+            request: HTTP запрос
+
+        Returns:
+            JSON ответ с результатами проверки здоровья компонентов
+        """
+        try:
+            health_status = await check_all_health(
+                stash_client=self.stash_client,
+                db_path=self.config.database.path,
+                bot=self.application.bot if self.application else None,
+            )
+            status_code = (
+                200
+                if health_status["overall_status"] == "healthy"
+                else 503
+                if health_status["overall_status"] == "unhealthy"
+                else 200
+            )
+            return web.json_response(health_status, status=status_code)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Ошибка при проверке здоровья: {e}", exc_info=True)
+            return web.json_response(
+                {
+                    "overall_status": "error",
+                    "message": f"Ошибка при проверке здоровья: {str(e)}",
+                },
+                status=500,
+            )
+
+    async def _start_health_server(self):
+        """Запуск HTTP сервера для health checks в режиме polling."""
+        health_app = web.Application()
+        health_app.router.add_get("/health", self._handle_health_check)
+
+        self._health_app_runner = web.AppRunner(health_app)
+        try:
+            await self._health_app_runner.setup()
+            # Используем порт 8080 для health checks (можно настроить через конфиг)
+            health_port = int(os.getenv("HEALTH_CHECK_PORT", "8080"))
+            site = web.TCPSite(
+                self._health_app_runner,
+                "0.0.0.0",
+                health_port,
+            )
+            await site.start()
+            logger.info(
+                f"HTTP сервер health checks запущен на 0.0.0.0:{health_port}/health"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"Не удалось запустить HTTP сервер health checks: {e}", exc_info=True
+            )
+
+    async def _stop_health_server(self):
+        """Остановка HTTP сервера для health checks."""
+        if self._health_app_runner:
+            try:
+                await self._health_app_runner.cleanup()
+                logger.info("HTTP сервер health checks остановлен")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Ошибка при остановке HTTP сервера health checks: {e}")
 
     async def _stop_webhook_mode(self):
         """Остановка webhook-режима: удаление webhook и остановка HTTP-сервера."""
