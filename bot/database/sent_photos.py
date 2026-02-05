@@ -67,6 +67,7 @@ class SentPhotosRepository:
         """
         start_time = time.perf_counter()
         cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_str = cutoff_date.strftime("%Y-%m-%d %H:%M:%S")
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -77,7 +78,7 @@ class SentPhotosRepository:
                 WHERE sent_at >= ?
                   AND user_id IS NOT NULL
             """,
-                (cutoff_date,),
+                (cutoff_str,),
             )
 
             results = cursor.fetchall()
@@ -149,6 +150,7 @@ class SentPhotosRepository:
             days: Количество дней (записи старше будут удалены)
         """
         cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_str = cutoff_date.strftime("%Y-%m-%d %H:%M:%S")
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -157,7 +159,7 @@ class SentPhotosRepository:
                 DELETE FROM sent_photos
                 WHERE sent_at < ?
             """,
-                (cutoff_date,),
+                (cutoff_str,),
             )
             deleted_count = cursor.rowcount
             conn.commit()

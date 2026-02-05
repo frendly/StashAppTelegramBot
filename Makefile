@@ -28,6 +28,7 @@ help:
 	@echo "  make lint        - Проверить код линтером"
 	@echo "  make format      - Автоформатирование кода"
 	@echo "  make check       - Проверить форматирование (без изменений)"
+	@echo "  make test        - Запустить unit-тесты (pytest)"
 	@echo ""
 	@echo "GitHub Container Registry:"
 	@echo "  make ghcr-login      - Авторизация в GHCR"
@@ -131,3 +132,7 @@ check:
 	ruff check bot/
 	ruff format --check bot/
 	@echo "✅ Проверка завершена"
+
+test:
+	@echo "Запуск unit-тестов..."
+	pytest
