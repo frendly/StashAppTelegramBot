@@ -1,14 +1,22 @@
-# Pre-commit hooks configuration
-# Install with: pre-commit install
-# Update hooks: pre-commit autoupdate
+# Конфигурация pre-commit хуков
+# Установка: pre-commit install
+# Обновление версий хуков: pre-commit autoupdate
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version
+    # Версия ruff
     rev: v0.1.9
     hooks:
-      # Run the linter
+      # Запуск линтера
       - id: ruff
         args: [--fix]
-      # Run the formatter
+      # Запуск форматтера
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: pytest
+        name: "Запуск быстрых тестов (pytest)"
+        entry: pytest
+        language: system
+        pass_filenames: false
+        stages: [commit]
